@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kuafu Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>⚡ Kuafu GPU Cluster</h1>
+            <nav>
+                <button class="nav-link active" data-tab="overview">Overview</button>
+                <button class="nav-link" data-tab="nodes">Nodes</button>
+                <button class="nav-link" data-tab="gpus">GPUs</button>
+                <button class="nav-link" data-tab="jobs">Jobs</button>
+                <button class="nav-link" data-tab="queues">Queues</button>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="lab-banner" aria-label="Lab mode notice">
+            <strong>Lab Mode:</strong> this dashboard uses seeded A00/A01 data and a simulated in-memory scheduler.
+            Production Kuafu will run jobs through Kubernetes, GPU device plugins, and a scheduler adapter.
+        </section>
+
+        <!-- Overview Tab -->
+        <section id="overview-tab" class="tab-content active">
+            <h2>Cluster Overview</h2>
+            <div class="cards">
+                <div class="card">
+                    <h3>Nodes</h3>
+                    <div class="metric" id="nodes-metric">
+                        <span class="value">--</span>
+                        <span class="label">Total</span>
+                    </div>
+                    <div class="status-breakdown" id="nodes-status"></div>
+                </div>
+                <div class="card">
+                    <h3>GPUs</h3>
+                    <div class="metric" id="gpus-metric">
+                        <span class="value">--</span>
+                        <span class="label">Total</span>
+                    </div>
+                    <div class="status-breakdown" id="gpus-status"></div>
+                </div>
+                <div class="card">
+                    <h3>Jobs</h3>
+                    <div class="metric" id="jobs-metric">
+                        <span class="value">--</span>
+                        <span class="label">Active</span>
+                    </div>
+                    <div class="status-breakdown" id="jobs-status"></div>
+                </div>
+                <div class="card">
+                    <h3>Queues</h3>
+                    <div class="metric" id="queues-metric">
+                        <span class="value">--</span>
+                        <span class="label">Available</span>
+                    </div>
+                    <div class="status-breakdown" id="queues-status"></div>
+                </div>
+            </div>
+
+            <h2>Submit Job</h2>
+            <form id="submit-job-form" class="job-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="job-name">Job Name *</label>
+                        <input type="text" id="job-name" name="name" required 
+                               placeholder="my-training-job">
+                    </div>
+                    <div class="form-group">
+                        <label for="job-queue">Queue *</label>
+                        <select id="job-queue" name="queue" required>
+                            <option value="">Select Queue</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="job-image">Container Image *</label>
+                        <input type="text" id="job-image" name="image" required 
+                               placeholder="pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime">
+                    </div>
+                    <div class="form-group">
+                        <label for="job-gpus">GPUs</label>
+                        <input type="number" id="job-gpus" name="gpuCount" min="1" value="1">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="job-command">Command *</label>
+                    <input type="text" id="job-command" name="command" required 
+                           placeholder="python train.py --epochs 100">
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">Submit Job</button>
+                    <button type="reset" class="btn-secondary">Reset</button>
+                </div>
+                <div id="submit-result" class="result-message" role="alert"></div>
+            </form>
+        </section>
+
+        <!-- Nodes Tab -->
+        <section id="nodes-tab" class="tab-content">
+            <div class="table-header">
+                <h2>Nodes</h2>
+                <button class="btn-secondary" onclick="app.refresh()">Refresh</button>
+            </div>
+            <div class="table-container">
+                <table id="nodes-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Hostname</th>
+                            <th>CPUs</th>
+                            <th>Memory (GB)</th>
+                            <th>GPUs</th>
+                            <th>Last Heartbeat</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- GPUs Tab -->
+        <section id="gpus-tab" class="tab-content">
+            <div class="table-header">
+                <h2>GPUs</h2>
+                <button class="btn-secondary" onclick="app.refresh()">Refresh</button>
+            </div>
+            <div class="table-container">
+                <table id="gpus-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Node</th>
+                            <th>Index</th>
+                            <th>Model</th>
+                            <th>Memory (MB)</th>
+                            <th>Status</th>
+                            <th>Allocated To</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Jobs Tab -->
+        <section id="jobs-tab" class="tab-content">
+            <div class="table-header">
+                <h2>Jobs</h2>
+                <button class="btn-secondary" onclick="app.refresh()">Refresh</button>
+            </div>
+            <div class="table-container">
+                <table id="jobs-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Queue</th>
+                            <th>Status</th>
+                            <th>GPUs</th>
+                            <th>Submitted</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Queues Tab -->
+        <section id="queues-tab" class="tab-content">
+            <div class="table-header">
+                <h2>Queues</h2>
+                <button class="btn-secondary" onclick="app.refresh()">Refresh</button>
+            </div>
+            <div class="table-container">
+                <table id="queues-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Priority</th>
+                            <th>Max GPUs</th>
+                            <th>Pending Jobs</th>
+                            <th>Running Jobs</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>Kuafu GPU Management Platform &copy; 2026</p>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
