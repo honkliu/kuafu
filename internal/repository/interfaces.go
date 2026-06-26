@@ -22,6 +22,13 @@ type QueueRepository interface {
 	AddQueue(*domain.Queue) error
 	GetQueue(string) (*domain.Queue, error)
 	ListQueues() ([]*domain.Queue, error)
+	DeleteQueue(string) error
+}
+
+type ReservationRepository interface {
+	AddReservation(*domain.NodeReservation) error
+	GetReservation(string) (*domain.NodeReservation, error)
+	ListReservations() ([]*domain.NodeReservation, error)
 }
 
 type TenantRepository interface {
@@ -43,6 +50,7 @@ type Repository interface {
 	InventoryRepository
 	JobRepository
 	QueueRepository
+	ReservationRepository
 	TenantRepository
 	GPUAllocationRepository
 }

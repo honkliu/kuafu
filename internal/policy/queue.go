@@ -18,6 +18,9 @@ func AdmitJob(queue *domain.Queue, job *domain.Job, usage QueueUsage) error {
 	if queue == nil {
 		return kuafuerrors.New(kuafuerrors.KindNotFound, "queue not found")
 	}
+	if queue.Status == domain.QueueStatusPaused {
+		return kuafuerrors.New(kuafuerrors.KindPermanent, fmt.Sprintf("queue %q is paused", queue.Name))
+	}
 	if job == nil {
 		return kuafuerrors.New(kuafuerrors.KindPermanent, "job cannot be nil")
 	}

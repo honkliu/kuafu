@@ -16,8 +16,10 @@ It documents:
 
 - Health and readiness endpoints.
 - Node and GPU inventory endpoints.
-- Job submit/list/detail/cancel/log endpoints.
-- Queue list/detail endpoints.
+- Job submit/list/detail/start/stop/restart/cancel/log endpoints.
+- Job GPU metrics endpoint for current allocated GPU usage snapshots.
+- Node reservation endpoints and lab-mode reserved-node Docker command rendering.
+- Queue create/list/detail/update/delete endpoints, including Active/Paused scheduling state.
 - Cluster summary endpoint.
 - Development-only `X-Kuafu-User` header scaffold for project-scoped job submission.
 - A00 external `30000` entry in the server examples.

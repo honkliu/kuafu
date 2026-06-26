@@ -104,7 +104,7 @@ func (c *SyncController) syncRuntimeStatus(ctx context.Context, job *domain.Job)
 
 func isTerminalStatus(status domain.JobStatus) bool {
 	switch status {
-	case domain.JobStatusCompleted, domain.JobStatusFailed, domain.JobStatusCanceled:
+	case domain.JobStatusCompleted, domain.JobStatusFailed, domain.JobStatusCanceled, domain.JobStatusStopped:
 		return true
 	default:
 		return false

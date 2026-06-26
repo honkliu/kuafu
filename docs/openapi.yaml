@@ -20,6 +20,7 @@ tags:
   - name: inventory
   - name: jobs
   - name: queues
+  - name: reservations
   - name: cluster
 paths:
   /health:
@@ -235,6 +236,172 @@ paths:
                     type: array
                     items:
                       type: string
+  /api/v1/jobs/{id}/start:
+    post:
+      tags: [jobs]
+      operationId: startJob
+      description: Requeue a stopped, canceled, failed, or completed job.
+      parameters:
+        - $ref: '#/components/parameters/JobID'
+      responses:
+        '200':
+          description: Started job intent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/Error'
+  /api/v1/jobs/{id}/stop:
+    post:
+      tags: [jobs]
+      operationId: stopJob
+      description: Stop a queued or running job and release any allocated GPUs.
+      parameters:
+        - $ref: '#/components/parameters/JobID'
+      responses:
+        '200':
+          description: Stopped job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/Error'
+  /api/v1/jobs/{id}/restart:
+    post:
+      tags: [jobs]
+      operationId: restartJob
+      description: Release current allocation if needed, clear terminal state, and return the job to the queue.
+      parameters:
+        - $ref: '#/components/parameters/JobID'
+      responses:
+        '200':
+          description: Restarted job intent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/Error'
+  /api/v1/jobs/{id}/metrics:
+    get:
+      tags: [jobs]
+      operationId: getJobMetrics
+      parameters:
+        - $ref: '#/components/parameters/JobID'
+      responses:
+        '200':
+          description: Current job-scoped GPU usage snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  status:
+                    type: string
+                  generatedAt:
+                    type: string
+                    format: date-time
+                  gpus:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GPUUsage'
+  /api/v1/reservations:
+    get:
+      tags: [reservations]
+      operationId: listReservations
+      responses:
+        '200':
+          description: Reservation list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reservations, count]
+                properties:
+                  reservations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NodeReservation'
+                  count:
+                    type: integer
+    post:
+      tags: [reservations]
+      operationId: createReservation
+      description: Create a lab-mode whole-node reservation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReservationCreateRequest'
+      responses:
+        '201':
+          description: Reservation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeReservation'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /api/v1/reservations/{id}:
+    get:
+      tags: [reservations]
+      operationId: getReservation
+      parameters:
+        - $ref: '#/components/parameters/ReservationID'
+      responses:
+        '200':
+          description: Reservation detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeReservation'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [reservations]
+      operationId: releaseReservation
+      parameters:
+        - $ref: '#/components/parameters/ReservationID'
+      responses:
+        '200':
+          description: Released reservation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeReservation'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/reservations/{id}/commands:
+    post:
+      tags: [reservations]
+      operationId: createReservationCommand
+      description: Record and render exact per-node Docker commands for a reservation. Lab mode does not execute remotely yet.
+      parameters:
+        - $ref: '#/components/parameters/ReservationID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReservationCommandRequest'
+      responses:
+        '201':
+          description: Command recorded and rendered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReservationCommand'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /api/v1/queues:
     get:
       tags: [queues]
@@ -254,6 +421,26 @@ paths:
                       $ref: '#/components/schemas/Queue'
                   count:
                     type: integer
+    post:
+      tags: [queues]
+      operationId: createQueue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Queue'
+      responses:
+        '201':
+          description: Queue created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /api/v1/queues/{name}:
     get:
       tags: [queues]
@@ -273,6 +460,55 @@ paths:
                 $ref: '#/components/schemas/Queue'
         '404':
           $ref: '#/components/responses/Error'
+    put:
+      tags: [queues]
+      operationId: updateQueue
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Queue'
+      responses:
+        '200':
+          description: Queue updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [queues]
+      operationId: deleteQueue
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Queue deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: string
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
 components:
   parameters:
     NodeName:
@@ -282,6 +518,12 @@ components:
       schema:
         type: string
     JobID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    ReservationID:
       name: id
       in: path
       required: true
@@ -396,7 +638,7 @@ components:
               type: string
             status:
               type: string
-              enum: [Queued, Running, Completed, Failed, Canceled]
+              enum: [Queued, Running, Completed, Failed, Canceled, Stopped]
             runtimeId:
               type: string
             submittedAt:
@@ -425,6 +667,9 @@ components:
       properties:
         name:
           type: string
+        status:
+          type: string
+          enum: [Active, Paused]
         project:
           type: string
         maxGpus:
@@ -445,6 +690,115 @@ components:
           type: integer
         jobsRunning:
           type: integer
+    ReservationCreateRequest:
+      type: object
+      required: [name, nodeNames]
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+        nodeNames:
+          type: array
+          items:
+            type: string
+        durationHours:
+          type: integer
+    ReservationCommandRequest:
+      type: object
+      required: [image, startCommand]
+      properties:
+        image:
+          type: string
+        dockerRunOptions:
+          type: string
+        entryPoint:
+          type: string
+        startCommand:
+          type: string
+        workingDirectory:
+          type: string
+        environment:
+          type: array
+          items:
+            type: string
+    ReservationNodeCommand:
+      type: object
+      properties:
+        nodeName:
+          type: string
+        command:
+          type: string
+    ReservationCommand:
+      allOf:
+        - $ref: '#/components/schemas/ReservationCommandRequest'
+        - type: object
+          properties:
+            id:
+              type: string
+            renderedCommands:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReservationNodeCommand'
+            status:
+              type: string
+              enum: [Recorded]
+            createdAt:
+              type: string
+              format: date-time
+            logs:
+              type: array
+              items:
+                type: string
+    NodeReservation:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        owner:
+          type: string
+        nodeNames:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [Active, Released]
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        commands:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReservationCommand'
+    GPUUsage:
+      type: object
+      properties:
+        gpuId:
+          type: string
+        nodeName:
+          type: string
+        index:
+          type: integer
+        model:
+          type: string
+        memoryTotalMb:
+          type: integer
+        memoryUsedMb:
+          type: integer
+        utilization:
+          type: integer
+        powerWatts:
+          type: integer
+        temperatureC:
+          type: integer
+        health:
+          type: string
     ClusterSummary:
       type: object
       properties:

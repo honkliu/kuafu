@@ -1,0 +1,8 @@
+import { Activity, Gauge, Server, ShieldCheck } from 'lucide-react';
+import { CapabilityCard, MetricCard } from '../components/Primitives.jsx';
+
+export default function MonitoringView({ nodes, gpus, jobs, reservations }) {
+  const allocated = gpus.filter((gpu) => gpu.status === 'Allocated').length;
+  const utilization = gpus.length ? Math.round((allocated / gpus.length) * 100) : 0;
+  return <section className="panel stack"><div className="section-header"><div><p className="eyebrow">Observability</p><h2>Monitoring</h2><p>Current values are API snapshots. Production needs Prometheus + DCGM/ROCm + logs/events.</p></div></div><div className="metric-grid"><MetricCard label="Fleet GPU Pressure" value={`${utilization}%`} hint={`${allocated}/${gpus.length} allocated`} icon={Gauge} /><MetricCard label="Healthy Nodes" value={nodes.filter((node) => node.status === 'Ready').length} hint={`${nodes.length} total`} icon={Server} /><MetricCard label="Running Jobs" value={jobs.filter((job) => job.status === 'Running').length} hint="runtime active" icon={Activity} /><MetricCard label="Active Leases" value={reservations.length} hint="dedicated capacity" icon={ShieldCheck} /></div><div className="template-grid"><CapabilityCard title="DCGM GPU timelines" status="pending" body="SM utilization, memory, power, temperature, ECC/XID, per job and per node." /><CapabilityCard title="Log/event stream" status="pending" body="stdout/stderr, Kubernetes events, scheduler reasons, failure diagnosis." /><CapabilityCard title="Grafana node drilldown" status="pending" body="OpenPAI-style node detail can embed Grafana once metrics are deployed." /></div></section>;
+}

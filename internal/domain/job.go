@@ -31,6 +31,7 @@ const (
 	JobStatusCompleted JobStatus = "Completed"
 	JobStatusFailed    JobStatus = "Failed"
 	JobStatusCanceled  JobStatus = "Canceled"
+	JobStatusStopped   JobStatus = "Stopped"
 )
 
 // JobSubmitRequest represents a job submission request

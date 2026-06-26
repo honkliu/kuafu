@@ -12,10 +12,11 @@ The lab prototype includes:
 
 - ✅ Domain models for Node/GPU inventory
 - ✅ In-memory repository with A00/A01 testbed data
-- ✅ Simulated, in-memory job scheduler with queueing, GPU allocation, terminal states, cancellation, and logs
-- ✅ HTTP API server with inventory, jobs, queues, cluster summary, and dashboard static serving
+- ✅ Simulated, in-memory job scheduler with queueing, GPU allocation, start/stop/restart/cancel actions, terminal states, and logs
+- ✅ HTTP API server with inventory, jobs, queues, reservations, cluster summary, and React console static serving
 - ✅ CLI tool for inventory, jobs, and queues
-- ✅ Vanilla HTML/CSS/JS dashboard with job submission
+- ✅ React/Vite GPU lease console with OpenPAI/Slurm/lease-platform-inspired IA: Cluster, Nodes, Jobs, Leases, Workspaces, Monitoring, Cost, Catalog, Projects, Audit, and Admin
+- ✅ Node-page lease workflow, job detail/logs/metrics drawer, explicit pending-capability surfaces for runtime, cost, catalog, governance, and admin work
 - ✅ Unit tests, Docker image validation, and E2E smoke validation on A00
 - ✅ Full documentation
 
@@ -55,9 +56,9 @@ The world-class feature model, OpenPAI gap analysis, and 40-step delivery progra
 - PowerShell (for validation scripts)
 - Go 1.22+ (for local development)
 
-### Web Dashboard
+### Web Console
 
-The simplest way to explore Kuafu is through the web dashboard:
+The simplest way to explore Kuafu is through the React web console:
 
 ```powershell
 # Start the lab-mode server (from repo root)
@@ -79,13 +80,16 @@ go run cmd/kuafu-server/main.go --config configs/kuafu.a00.lab.json
 
 Project-scoped lab job submissions use the development `X-Kuafu-User` header. Seeded lab users are `lab-admin`, `lab-user`, and `lab-viewer`.
 
-The dashboard provides:
+The console provides:
 
 - **Cluster overview** with real-time metrics (nodes, GPUs, jobs, queues)
-- **Node inventory table** with status and resource details
+- **Node inventory table** with status, free/allocated GPU counts, reservation state, and reserve actions
+- **Node reservation drawer** launched from the Nodes page, with multi-node selection, duration/owner fields, and reserved-node command rendering
+- **Lease platform views** for Workspaces, Monitoring, Cost, Catalog, Projects, Audit, and Admin, with runtime-dependent items marked as pending instead of faked
 - **GPU inventory table** with allocation status
-- **Job queue** with running and pending jobs
-- **Queue management** showing priority and capacity
+- **Job management** with submission, filters, start/stop/restart/cancel actions, and running/completed job details
+- **Job detail drawer** showing submitted spec, exact runtime command, logs, allocated GPUs/nodes, and GPU usage snapshot
+- **Queue management** with create/edit/delete, Active/Paused scheduling state, hard/soft quotas, per-job limits, queue depth limits, priority, and burst policy
 - **Job submission form** for quick testing
 
 All data auto-refreshes every 10 seconds.
@@ -129,7 +133,8 @@ kuafu/
 │   └── api/                  # HTTP handlers
 ├── pkg/
 │   └── fixtures/             # Testbed seed data
-├── web/                      # Static dashboard
+├── frontend/                 # React/Vite console source
+├── web/                      # Built static console served by the Go API server
 ├── docs/
 │   ├── kuafu-design.md       # Product design document
 │   ├── testbed-a00-a01.md    # Testbed configuration
@@ -141,21 +146,34 @@ kuafu/
 
 ## API Endpoints
 
-| Endpoint                      | Description              |
-|-------------------------------|--------------------------|
-| `GET /health`                 | Health check             |
-| `GET /ready`                  | Readiness check          |
-| `GET /api/v1/cluster/summary` | Cluster statistics       |
-| `GET /api/v1/nodes`           | List all nodes           |
-| `GET /api/v1/nodes/{name}`    | Get node details         |
-| `GET /api/v1/gpus`            | List all GPUs            |
-| `GET /api/v1/gpus/{id}`       | Get GPU details          |
-| `GET /api/v1/jobs`            | List all jobs            |
-| `POST /api/v1/jobs`           | Submit a new job         |
-| `GET /api/v1/jobs/{id}`       | Get job details          |
-| `DELETE /api/v1/jobs/{id}`    | Cancel a job             |
-| `GET /api/v1/queues`          | List all queues          |
-| `GET /api/v1/queues/{name}`   | Get queue details        |
+| Endpoint                                         | Description                         |
+|--------------------------------------------------|-------------------------------------|
+| `GET /health`                                    | Health check                        |
+| `GET /ready`                                     | Readiness check                     |
+| `GET /api/v1/cluster/summary`                    | Cluster statistics                  |
+| `GET /api/v1/nodes`                              | List all nodes                      |
+| `GET /api/v1/nodes/{name}`                       | Get node details                    |
+| `GET /api/v1/gpus`                               | List all GPUs                       |
+| `GET /api/v1/gpus/{id}`                          | Get GPU details                     |
+| `GET /api/v1/jobs`                               | List all jobs                       |
+| `POST /api/v1/jobs`                              | Submit a new job                    |
+| `GET /api/v1/jobs/{id}`                          | Get job details                     |
+| `POST /api/v1/jobs/{id}/start`                   | Start/requeue a stopped job         |
+| `POST /api/v1/jobs/{id}/stop`                    | Stop a queued/running job           |
+| `POST /api/v1/jobs/{id}/restart`                 | Restart a job                       |
+| `DELETE /api/v1/jobs/{id}`                       | Cancel a job                        |
+| `GET /api/v1/jobs/{id}/logs`                     | Get job logs                        |
+| `GET /api/v1/jobs/{id}/metrics`                  | Get job GPU metrics snapshot        |
+| `GET /api/v1/queues`                             | List all queues                     |
+| `POST /api/v1/queues`                            | Create a queue                      |
+| `GET /api/v1/queues/{name}`                      | Get queue details                   |
+| `PUT /api/v1/queues/{name}`                      | Update queue policy/state           |
+| `DELETE /api/v1/queues/{name}`                   | Delete an inactive queue            |
+| `GET /api/v1/reservations`                       | List node reservations              |
+| `POST /api/v1/reservations`                      | Reserve dedicated nodes             |
+| `GET /api/v1/reservations/{id}`                  | Get reservation details             |
+| `DELETE /api/v1/reservations/{id}`               | Release reservation                 |
+| `POST /api/v1/reservations/{id}/commands`        | Record/render reserved-node command |
 
 ## CLI Commands
 
@@ -171,6 +189,19 @@ kuafu gpus list
 
 # Offline mode (no server required)
 kuafu --fixture nodes list
+
+# Manage jobs
+kuafu jobs start <id>
+kuafu jobs stop <id>
+kuafu jobs restart <id>
+kuafu jobs cancel <id>
+
+# Manage queues
+kuafu queues create --name research --max-gpus 16 --soft-gpus 12 --priority 200 --allow-burst
+kuafu queues update research --max-gpus 24 --max-gpus-per-job 8
+kuafu queues pause research
+kuafu queues resume research
+kuafu queues delete research
 ```
 
 ## Documentation
@@ -182,6 +213,19 @@ kuafu --fixture nodes list
 ## Development
 
 See [docs/sprint0-dev-guide.md](docs/sprint0-dev-guide.md) for detailed build and test instructions.
+
+### Frontend Development
+
+```powershell
+# Build React console into web/ for the Go server
+npm ci
+npm run build
+
+# Run Vite dev server for frontend-only iteration
+npm run dev
+```
+
+The Dockerfile also runs `npm ci && npm run build`, so the production image always contains a fresh React build.
 
 ### Runtime Modes
 

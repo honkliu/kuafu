@@ -9,24 +9,26 @@ import (
 
 // MemoryRepository provides in-memory storage for nodes, GPUs, jobs, and queues
 type MemoryRepository struct {
-	nodes    map[string]*domain.Node
-	gpus     map[string]*domain.GPU
-	jobs     map[string]*domain.Job
-	queues   map[string]*domain.Queue
-	users    map[string]*domain.User
-	projects map[string]*domain.Project
-	mu       sync.RWMutex
+	nodes        map[string]*domain.Node
+	gpus         map[string]*domain.GPU
+	jobs         map[string]*domain.Job
+	queues       map[string]*domain.Queue
+	reservations map[string]*domain.NodeReservation
+	users        map[string]*domain.User
+	projects     map[string]*domain.Project
+	mu           sync.RWMutex
 }
 
 // NewMemoryRepository creates a new in-memory repository
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		nodes:    make(map[string]*domain.Node),
-		gpus:     make(map[string]*domain.GPU),
-		jobs:     make(map[string]*domain.Job),
-		queues:   make(map[string]*domain.Queue),
-		users:    make(map[string]*domain.User),
-		projects: make(map[string]*domain.Project),
+		nodes:        make(map[string]*domain.Node),
+		gpus:         make(map[string]*domain.GPU),
+		jobs:         make(map[string]*domain.Job),
+		queues:       make(map[string]*domain.Queue),
+		reservations: make(map[string]*domain.NodeReservation),
+		users:        make(map[string]*domain.User),
+		projects:     make(map[string]*domain.Project),
 	}
 }
 
@@ -199,6 +201,54 @@ func (r *MemoryRepository) ListQueues() ([]*domain.Queue, error) {
 	}
 
 	return queues, nil
+}
+
+// DeleteQueue removes a queue by name.
+func (r *MemoryRepository) DeleteQueue(name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.queues[name]; !exists {
+		return fmt.Errorf("queue %s not found", name)
+	}
+	delete(r.queues, name)
+	return nil
+}
+
+// AddReservation adds or updates a node reservation.
+func (r *MemoryRepository) AddReservation(reservation *domain.NodeReservation) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if reservation.ID == "" {
+		return fmt.Errorf("reservation id cannot be empty")
+	}
+	r.reservations[reservation.ID] = reservation
+	return nil
+}
+
+// GetReservation retrieves a node reservation by ID.
+func (r *MemoryRepository) GetReservation(id string) (*domain.NodeReservation, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	reservation, exists := r.reservations[id]
+	if !exists {
+		return nil, fmt.Errorf("reservation %s not found", id)
+	}
+	return reservation, nil
+}
+
+// ListReservations returns all node reservations.
+func (r *MemoryRepository) ListReservations() ([]*domain.NodeReservation, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	reservations := make([]*domain.NodeReservation, 0, len(r.reservations))
+	for _, reservation := range r.reservations {
+		reservations = append(reservations, reservation)
+	}
+	return reservations, nil
 }
 
 // AddUser adds or updates a user.

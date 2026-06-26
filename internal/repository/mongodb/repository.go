@@ -142,6 +142,39 @@ func (r *Repository) ListQueues() ([]*domain.Queue, error) {
 	return findMany[domain.Queue](r, "queues", bson.M{})
 }
 
+func (r *Repository) DeleteQueue(name string) error {
+	ctx, cancel := r.operationContext()
+	defer cancel()
+
+	result, err := r.db.Collection("queues").DeleteOne(ctx, bson.M{"name": name})
+	if err != nil {
+		return err
+	}
+	if result.DeletedCount == 0 {
+		return fmt.Errorf("queue %s not found", name)
+	}
+	return nil
+}
+
+func (r *Repository) AddReservation(reservation *domain.NodeReservation) error {
+	if reservation.ID == "" {
+		return fmt.Errorf("reservation id cannot be empty")
+	}
+	return r.replaceOne("reservations", bson.M{"id": reservation.ID}, reservation)
+}
+
+func (r *Repository) GetReservation(id string) (*domain.NodeReservation, error) {
+	var reservation domain.NodeReservation
+	if err := r.findOne("reservations", bson.M{"id": id}, &reservation); err != nil {
+		return nil, err
+	}
+	return &reservation, nil
+}
+
+func (r *Repository) ListReservations() ([]*domain.NodeReservation, error) {
+	return findMany[domain.NodeReservation](r, "reservations", bson.M{})
+}
+
 func (r *Repository) AddUser(user *domain.User) error {
 	if user.Alias == "" {
 		return fmt.Errorf("user alias cannot be empty")

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/microsoft/kuafu/internal/domain"
+	"github.com/microsoft/kuafu/internal/policy"
 	"github.com/microsoft/kuafu/internal/repository"
 )
 
@@ -86,6 +87,11 @@ func (s *Scheduler) scheduleJobs() {
 }
 
 func (s *Scheduler) tryScheduleJob(job *domain.Job) {
+	queue, err := s.repo.GetQueue(job.Queue)
+	if err != nil || queue.Status == domain.QueueStatusPaused {
+		return
+	}
+
 	// Find available GPUs
 	gpus, err := s.repo.ListGPUs("")
 	if err != nil {
@@ -126,8 +132,7 @@ func (s *Scheduler) tryScheduleJob(job *domain.Job) {
 	}
 
 	// Update queue stats
-	queue, err := s.repo.GetQueue(job.Queue)
-	if err == nil {
+	if queue != nil {
 		queue.JobsQueued--
 		queue.JobsRunning++
 		if err := s.repo.AddQueue(queue); err != nil {
@@ -168,8 +173,8 @@ func (s *Scheduler) executeJob(job *domain.Job) {
 		return
 	}
 
-	// Check if job was canceled
-	if currentJob.Status == domain.JobStatusCanceled {
+	// Check if job was canceled or stopped while the lab executor was sleeping.
+	if currentJob.Status != domain.JobStatusRunning {
 		return
 	}
 
@@ -275,5 +280,153 @@ func (s *Scheduler) CancelJob(jobID string) error {
 		}
 	}
 
+	return nil
+}
+
+func (s *Scheduler) StartJob(jobID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, err := s.repo.GetJob(jobID)
+	if err != nil {
+		return err
+	}
+
+	switch job.Status {
+	case domain.JobStatusQueued:
+		return nil
+	case domain.JobStatusStopped, domain.JobStatusCanceled, domain.JobStatusFailed, domain.JobStatusCompleted:
+		queue, err := s.repo.GetQueue(job.Queue)
+		if err != nil {
+			return err
+		}
+		if queue.Status == domain.QueueStatusPaused {
+			return fmt.Errorf("queue %s is paused", queue.Name)
+		}
+		jobs, err := s.repo.ListJobs()
+		if err != nil {
+			return err
+		}
+		if err := policy.AdmitJob(queue, job, usageForQueueExcluding(queue.Name, jobs, job.ID)); err != nil {
+			return err
+		}
+		if err := s.repo.ReleaseGPUs(nonEmptyGPUIDs(job.AllocatedGPUs)); err != nil {
+			return err
+		}
+		job.Status = domain.JobStatusQueued
+		job.RuntimeID = ""
+		job.AllocatedGPUs = nil
+		job.StartedAt = time.Time{}
+		job.CompletedAt = time.Time{}
+		job.ExitCode = nil
+		job.ErrorMsg = ""
+		job.Logs = append(job.Logs, fmt.Sprintf("[%s] Job started by user and returned to queue %s", time.Now().Format("15:04:05"), job.Queue))
+		if err := s.repo.AddJob(job); err != nil {
+			return err
+		}
+		queue.JobsQueued++
+		return s.repo.AddQueue(queue)
+	default:
+		return fmt.Errorf("job %s is in state %s and cannot be started", jobID, job.Status)
+	}
+}
+
+func (s *Scheduler) StopJob(jobID string) error {
+	return s.stopJob(jobID, domain.JobStatusStopped, "Job stopped by user")
+}
+
+func (s *Scheduler) RestartJob(jobID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, err := s.repo.GetJob(jobID)
+	if err != nil {
+		return err
+	}
+	queue, err := s.repo.GetQueue(job.Queue)
+	if err != nil {
+		return err
+	}
+	if queue.Status == domain.QueueStatusPaused {
+		return fmt.Errorf("queue %s is paused", queue.Name)
+	}
+	jobs, err := s.repo.ListJobs()
+	if err != nil {
+		return err
+	}
+	if err := policy.AdmitJob(queue, job, usageForQueueExcluding(queue.Name, jobs, job.ID)); err != nil {
+		return err
+	}
+	wasQueued := job.Status == domain.JobStatusQueued
+	wasRunning := job.Status == domain.JobStatusRunning
+	if err := s.repo.ReleaseGPUs(nonEmptyGPUIDs(job.AllocatedGPUs)); err != nil {
+		return err
+	}
+	job.Status = domain.JobStatusQueued
+	job.RuntimeID = ""
+	job.AllocatedGPUs = nil
+	job.StartedAt = time.Time{}
+	job.CompletedAt = time.Time{}
+	job.ExitCode = nil
+	job.ErrorMsg = ""
+	job.Logs = append(job.Logs, fmt.Sprintf("[%s] Job restarted by user", time.Now().Format("15:04:05")))
+	if err := s.repo.AddJob(job); err != nil {
+		return err
+	}
+	if wasRunning && queue.JobsRunning > 0 {
+		queue.JobsRunning--
+	}
+	if !wasQueued {
+		queue.JobsQueued++
+	}
+	return s.repo.AddQueue(queue)
+}
+
+func usageForQueueExcluding(queueName string, jobs []*domain.Job, excludedJobID string) policy.QueueUsage {
+	filtered := make([]*domain.Job, 0, len(jobs))
+	for _, job := range jobs {
+		if job.ID != excludedJobID {
+			filtered = append(filtered, job)
+		}
+	}
+	return policy.UsageForQueue(queueName, filtered)
+}
+
+func (s *Scheduler) stopJob(jobID string, status domain.JobStatus, message string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, err := s.repo.GetJob(jobID)
+	if err != nil {
+		return err
+	}
+	if job.Status != domain.JobStatusQueued && job.Status != domain.JobStatusRunning {
+		return fmt.Errorf("job %s is in state %s and cannot be stopped", jobID, job.Status)
+	}
+	wasQueued := job.Status == domain.JobStatusQueued
+	wasRunning := job.Status == domain.JobStatusRunning
+
+	if err := s.repo.ReleaseGPUs(nonEmptyGPUIDs(job.AllocatedGPUs)); err != nil {
+		return err
+	}
+	job.Status = status
+	job.CompletedAt = time.Now()
+	job.AllocatedGPUs = nil
+	job.Logs = append(job.Logs, fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), message))
+	if err := s.repo.AddJob(job); err != nil {
+		return err
+	}
+
+	queue, err := s.repo.GetQueue(job.Queue)
+	if err == nil {
+		if wasQueued && queue.JobsQueued > 0 {
+			queue.JobsQueued--
+		} else if wasRunning && queue.JobsRunning > 0 {
+			queue.JobsRunning--
+		}
+		if err := s.repo.AddQueue(queue); err != nil {
+			return err
+		}
+	}
 	return nil
 }

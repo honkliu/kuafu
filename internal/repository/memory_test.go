@@ -226,6 +226,21 @@ func TestMemoryRepository_Queues(t *testing.T) {
 		t.Errorf("Expected 1 queue, got %d", len(queues))
 	}
 
+	// Test DeleteQueue
+	if err := repo.DeleteQueue("test-queue"); err != nil {
+		t.Fatalf("DeleteQueue failed: %v", err)
+	}
+	queues, err = repo.ListQueues()
+	if err != nil {
+		t.Fatalf("ListQueues after delete failed: %v", err)
+	}
+	if len(queues) != 0 {
+		t.Errorf("Expected 0 queues after delete, got %d", len(queues))
+	}
+	if err := repo.DeleteQueue("nonexistent"); err == nil {
+		t.Error("Expected error for deleting nonexistent queue")
+	}
+
 	// Test GetQueue not found
 	_, err = repo.GetQueue("nonexistent")
 	if err == nil {
@@ -236,6 +251,44 @@ func TestMemoryRepository_Queues(t *testing.T) {
 	emptyQueue := &domain.Queue{Name: ""}
 	if err := repo.AddQueue(emptyQueue); err == nil {
 		t.Error("Expected error for queue with empty name")
+	}
+}
+
+func TestMemoryRepository_Reservations(t *testing.T) {
+	repo := NewMemoryRepository()
+	reservation := &domain.NodeReservation{
+		ID:        "res-1",
+		Name:      "debug-nodes",
+		NodeNames: []string{"A00", "A01"},
+		Status:    domain.ReservationStatusActive,
+		CreatedAt: time.Now(),
+	}
+
+	if err := repo.AddReservation(reservation); err != nil {
+		t.Fatalf("AddReservation failed: %v", err)
+	}
+
+	retrieved, err := repo.GetReservation("res-1")
+	if err != nil {
+		t.Fatalf("GetReservation failed: %v", err)
+	}
+	if retrieved.Name != "debug-nodes" {
+		t.Errorf("Expected name 'debug-nodes', got '%s'", retrieved.Name)
+	}
+
+	reservations, err := repo.ListReservations()
+	if err != nil {
+		t.Fatalf("ListReservations failed: %v", err)
+	}
+	if len(reservations) != 1 {
+		t.Errorf("Expected 1 reservation, got %d", len(reservations))
+	}
+
+	if _, err := repo.GetReservation("missing"); err == nil {
+		t.Error("Expected error for missing reservation")
+	}
+	if err := repo.AddReservation(&domain.NodeReservation{}); err == nil {
+		t.Error("Expected error for reservation with empty ID")
 	}
 }
 

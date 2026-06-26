@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/kuafu/internal/auth"
@@ -397,6 +398,213 @@ func TestGetQueue(t *testing.T) {
 
 	if queue.Name != "default" {
 		t.Errorf("Expected queue name 'default', got '%s'", queue.Name)
+	}
+}
+
+func TestJobStartStopRestartActions(t *testing.T) {
+	server := setupTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/job-1719244800000000000/stop", nil)
+	w := httptest.NewRecorder()
+	server.handleJobDetail(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected stop status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var stopped domain.Job
+	if err := json.NewDecoder(w.Body).Decode(&stopped); err != nil {
+		t.Fatalf("Decode stopped job failed: %v", err)
+	}
+	if stopped.Status != domain.JobStatusStopped {
+		t.Fatalf("expected stopped job, got %#v", stopped)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+stopped.ID+"/start", nil)
+	w = httptest.NewRecorder()
+	server.handleJobDetail(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected start status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var started domain.Job
+	if err := json.NewDecoder(w.Body).Decode(&started); err != nil {
+		t.Fatalf("Decode started job failed: %v", err)
+	}
+	if started.Status != domain.JobStatusQueued {
+		t.Fatalf("expected queued job after start, got %#v", started)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/jobs/job-1719248400000000000/restart", nil)
+	w = httptest.NewRecorder()
+	server.handleJobDetail(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected restart status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var restarted domain.Job
+	if err := json.NewDecoder(w.Body).Decode(&restarted); err != nil {
+		t.Fatalf("Decode restarted job failed: %v", err)
+	}
+	if restarted.Status != domain.JobStatusQueued || len(restarted.AllocatedGPUs) != 0 {
+		t.Fatalf("expected restarted queued job without GPUs, got %#v", restarted)
+	}
+}
+
+func TestCreateUpdateDeleteQueue(t *testing.T) {
+	server := setupTestServer(t)
+
+	queue := domain.Queue{Name: "research", Status: domain.QueueStatusActive, Project: "lab", MaxGPUs: 12, SoftGPUs: 8, MaxGPUsPerJob: 4, MaxQueuedJobs: 20, MaxRunningJobs: 4, Priority: 250, AllowBurst: true}
+	body, err := json.Marshal(queue)
+	if err != nil {
+		t.Fatalf("Marshal queue failed: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/queues", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	server.handleQueues(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected create status 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	queue.Status = domain.QueueStatusPaused
+	queue.MaxGPUs = 10
+	body, err = json.Marshal(queue)
+	if err != nil {
+		t.Fatalf("Marshal update failed: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/queues/research", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	server.handleQueue(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected update status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var updated domain.Queue
+	if err := json.NewDecoder(w.Body).Decode(&updated); err != nil {
+		t.Fatalf("Decode queue failed: %v", err)
+	}
+	if updated.Status != domain.QueueStatusPaused || updated.MaxGPUs != 10 {
+		t.Fatalf("unexpected updated queue: %#v", updated)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/queues/research", nil)
+	w = httptest.NewRecorder()
+	server.handleQueue(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected delete status 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteQueueRejectsActiveJobs(t *testing.T) {
+	server := setupTestServer(t)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/queues/training", nil)
+	w := httptest.NewRecorder()
+	server.handleQueue(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected conflict deleting queue with active jobs, got %d", w.Code)
+	}
+}
+
+func TestCreateReservationAndCommand(t *testing.T) {
+	server := setupTestServer(t)
+
+	createReq := domain.ReservationCreateRequest{
+		Name:          "debug-session",
+		Owner:         "lab-user",
+		NodeNames:     []string{"A00", "A01"},
+		DurationHours: 4,
+	}
+	body, err := json.Marshal(createReq)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/reservations", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	server.handleReservations(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var reservation domain.NodeReservation
+	if err := json.NewDecoder(w.Body).Decode(&reservation); err != nil {
+		t.Fatalf("Decode reservation failed: %v", err)
+	}
+	if len(reservation.NodeNames) != 2 || reservation.Status != domain.ReservationStatusActive {
+		t.Fatalf("unexpected reservation: %#v", reservation)
+	}
+
+	commandReq := domain.ReservationCommandRequest{
+		Image:            "nvcr.io/nvidia/pytorch:24.05-py3",
+		DockerRunOptions: "--gpus all --ipc=host --ulimit memlock=-1",
+		EntryPoint:       "/bin/bash",
+		WorkingDirectory: "/workspace",
+		Environment:      []string{"NCCL_DEBUG=INFO"},
+		StartCommand:     "-lc 'nvidia-smi && torchrun train.py'",
+	}
+	body, err = json.Marshal(commandReq)
+	if err != nil {
+		t.Fatalf("Marshal command failed: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/reservations/"+reservation.ID+"/commands", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	server.handleReservationDetail(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected command status 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var command domain.ReservationCommand
+	if err := json.NewDecoder(w.Body).Decode(&command); err != nil {
+		t.Fatalf("Decode command failed: %v", err)
+	}
+	if len(command.RenderedCommands) != 2 {
+		t.Fatalf("expected rendered command per reserved node, got %#v", command.RenderedCommands)
+	}
+	if !strings.Contains(command.RenderedCommands[0].Command, "--gpus all") {
+		t.Fatalf("expected docker options in rendered command, got %s", command.RenderedCommands[0].Command)
+	}
+}
+
+func TestCreateReservationRejectsNodeConflict(t *testing.T) {
+	server := setupTestServer(t)
+
+	first := domain.ReservationCreateRequest{Name: "first", NodeNames: []string{"A00"}}
+	body, err := json.Marshal(first)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/reservations", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	server.handleReservations(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected first create to succeed, got %d", w.Code)
+	}
+
+	second := domain.ReservationCreateRequest{Name: "second", NodeNames: []string{"A00"}}
+	body, err = json.Marshal(second)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/reservations", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	server.handleReservations(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected conflict, got %d", w.Code)
+	}
+}
+
+func TestJobMetricsForRunningJob(t *testing.T) {
+	server := setupTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-1719248400000000000/metrics", nil)
+	w := httptest.NewRecorder()
+
+	server.handleJobDetail(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	var response struct {
+		JobID string                   `json:"jobId"`
+		GPUs  []map[string]interface{} `json:"gpus"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Decode metrics failed: %v", err)
+	}
+	if response.JobID == "" || len(response.GPUs) == 0 {
+		t.Fatalf("expected job metrics with GPUs, got %#v", response)
 	}
 }
 

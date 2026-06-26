@@ -94,7 +94,7 @@ func handleGPUsCommand(args []string) {
 
 func handleJobsCommand(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "jobs subcommand required: submit, list, describe, cancel, logs")
+		fmt.Fprintln(os.Stderr, "jobs subcommand required: submit, list, describe, start, stop, restart, cancel, logs")
 		os.Exit(1)
 	}
 
@@ -114,7 +114,13 @@ func handleJobsCommand(args []string) {
 			fmt.Fprintln(os.Stderr, "job ID required")
 			os.Exit(1)
 		}
-		cancelJob(args[1])
+		doJobAction(args[1], "cancel")
+	case "start", "stop", "restart":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "job ID required")
+			os.Exit(1)
+		}
+		doJobAction(args[1], args[0])
 	case "logs":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "job ID required")
@@ -129,7 +135,7 @@ func handleJobsCommand(args []string) {
 
 func handleQueuesCommand(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "queues subcommand required: list, describe")
+		fmt.Fprintln(os.Stderr, "queues subcommand required: list, describe, create, update, pause, resume, delete")
 		os.Exit(1)
 	}
 
@@ -142,6 +148,32 @@ func handleQueuesCommand(args []string) {
 			os.Exit(1)
 		}
 		describeQueue(args[1])
+	case "create":
+		createQueue(args[1:])
+	case "update":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "queue name required")
+			os.Exit(1)
+		}
+		updateQueue(args[1], args[2:])
+	case "pause":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "queue name required")
+			os.Exit(1)
+		}
+		setQueueStatus(args[1], domain.QueueStatusPaused)
+	case "resume":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "queue name required")
+			os.Exit(1)
+		}
+		setQueueStatus(args[1], domain.QueueStatusActive)
+	case "delete":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "queue name required")
+			os.Exit(1)
+		}
+		deleteQueue(args[1])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown queues subcommand: %s\n", args[0])
 		os.Exit(1)
@@ -451,20 +483,26 @@ func describeJob(jobID string) {
 	}
 }
 
-func cancelJob(jobID string) {
+func doJobAction(jobID string, action string) {
 	if fixture {
-		fmt.Fprintln(os.Stderr, "Job cancel not supported in fixture mode")
+		fmt.Fprintf(os.Stderr, "Job %s not supported in fixture mode\n", action)
 		os.Exit(1)
 	}
 
-	req, err := http.NewRequest(http.MethodDelete, apiURL+"/api/v1/jobs/"+jobID, nil)
+	method := http.MethodPost
+	path := apiURL + "/api/v1/jobs/" + jobID + "/" + action
+	if action == "cancel" {
+		method = http.MethodDelete
+		path = apiURL + "/api/v1/jobs/" + jobID
+	}
+	req, err := http.NewRequest(method, path, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating cancel request: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error creating job %s request: %v\n", action, err)
 		os.Exit(1)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error canceling job: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error running job %s: %v\n", action, err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
@@ -474,7 +512,12 @@ func cancelJob(jobID string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Job %s canceled\n", jobID)
+	var job domain.Job
+	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding job %s response: %v\n", action, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Job %s %s: %s\n", job.ID, action, job.Status)
 }
 
 func getJobLogs(jobID string) {
@@ -530,10 +573,12 @@ func listQueues() {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tMAX GPUs\tPRIORITY\tQUEUED\tRUNNING")
+	fmt.Fprintln(w, "NAME\tSTATUS\tPROJECT\tMAX GPUs\tPRIORITY\tQUEUED\tRUNNING")
 	for _, q := range result.Queues {
-		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\n",
 			q.Name,
+			queueStatusOrDefault(q.Status),
+			valueOrDash(q.Project),
 			q.MaxGPUs,
 			q.Priority,
 			q.JobsQueued,
@@ -571,10 +616,189 @@ func describeQueue(name string) {
 	}
 
 	fmt.Printf("Name:          %s\n", queue.Name)
+	fmt.Printf("Status:        %s\n", queueStatusOrDefault(queue.Status))
+	fmt.Printf("Project:       %s\n", valueOrDash(queue.Project))
 	fmt.Printf("Max GPUs:      %d\n", queue.MaxGPUs)
+	fmt.Printf("Soft GPUs:     %d\n", queue.SoftGPUs)
+	fmt.Printf("Max/job GPUs:  %d\n", queue.MaxGPUsPerJob)
+	fmt.Printf("Max queued:    %d\n", queue.MaxQueuedJobs)
+	fmt.Printf("Max running:   %d\n", queue.MaxRunningJobs)
+	fmt.Printf("Allow burst:   %v\n", queue.AllowBurst)
 	fmt.Printf("Priority:      %d\n", queue.Priority)
 	fmt.Printf("Queued Jobs:   %d\n", queue.JobsQueued)
 	fmt.Printf("Running Jobs:  %d\n", queue.JobsRunning)
+}
+
+func createQueue(args []string) {
+	if fixture {
+		fmt.Fprintln(os.Stderr, "Queue create not supported in fixture mode")
+		os.Exit(1)
+	}
+	queue := domain.Queue{Status: domain.QueueStatusActive, MaxGPUs: 8, Priority: 100}
+	applyQueueArgs(&queue, args, true)
+	if queue.Name == "" {
+		fmt.Fprintln(os.Stderr, "queue --name is required")
+		os.Exit(1)
+	}
+	saveQueue(http.MethodPost, apiURL+"/api/v1/queues", queue)
+	fmt.Printf("Queue %s created\n", queue.Name)
+}
+
+func updateQueue(name string, args []string) {
+	if fixture {
+		fmt.Fprintln(os.Stderr, "Queue update not supported in fixture mode")
+		os.Exit(1)
+	}
+	queue := fetchQueueOrExit(name)
+	applyQueueArgs(&queue, args, false)
+	queue.Name = name
+	saveQueue(http.MethodPut, apiURL+"/api/v1/queues/"+name, queue)
+	fmt.Printf("Queue %s updated\n", name)
+}
+
+func setQueueStatus(name string, status domain.QueueStatus) {
+	if fixture {
+		fmt.Fprintf(os.Stderr, "Queue %s not supported in fixture mode\n", strings.ToLower(string(status)))
+		os.Exit(1)
+	}
+	queue := fetchQueueOrExit(name)
+	queue.Status = status
+	saveQueue(http.MethodPut, apiURL+"/api/v1/queues/"+name, queue)
+	fmt.Printf("Queue %s is now %s\n", name, status)
+}
+
+func deleteQueue(name string) {
+	if fixture {
+		fmt.Fprintln(os.Stderr, "Queue delete not supported in fixture mode")
+		os.Exit(1)
+	}
+	req, err := http.NewRequest(http.MethodDelete, apiURL+"/api/v1/queues/"+name, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating queue delete request: %v\n", err)
+		os.Exit(1)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error deleting queue: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", readResponseBody(resp.Body))
+		os.Exit(1)
+	}
+	fmt.Printf("Queue %s deleted\n", name)
+}
+
+func applyQueueArgs(queue *domain.Queue, args []string, allowName bool) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-n", "--name":
+			if !allowName {
+				fmt.Fprintln(os.Stderr, "queue name is positional for update")
+				os.Exit(1)
+			}
+			queue.Name = nextArg(args, &i, "queue name")
+		case "--status":
+			queue.Status = domain.QueueStatus(nextArg(args, &i, "queue status"))
+		case "--project":
+			queue.Project = nextArg(args, &i, "project")
+		case "--max-gpus":
+			queue.MaxGPUs = parseIntArg(nextArg(args, &i, "max GPUs"), "max GPUs")
+		case "--soft-gpus":
+			queue.SoftGPUs = parseIntArg(nextArg(args, &i, "soft GPUs"), "soft GPUs")
+		case "--max-gpus-per-job":
+			queue.MaxGPUsPerJob = parseIntArg(nextArg(args, &i, "max GPUs per job"), "max GPUs per job")
+		case "--max-queued-jobs":
+			queue.MaxQueuedJobs = parseIntArg(nextArg(args, &i, "max queued jobs"), "max queued jobs")
+		case "--max-running-jobs":
+			queue.MaxRunningJobs = parseIntArg(nextArg(args, &i, "max running jobs"), "max running jobs")
+		case "--priority":
+			queue.Priority = parseIntArg(nextArg(args, &i, "priority"), "priority")
+		case "--allow-burst":
+			queue.AllowBurst = true
+		case "--no-allow-burst":
+			queue.AllowBurst = false
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown queue option: %s\n", args[i])
+			os.Exit(1)
+		}
+	}
+}
+
+func nextArg(args []string, index *int, name string) string {
+	if *index+1 >= len(args) {
+		fmt.Fprintf(os.Stderr, "missing value for %s\n", name)
+		os.Exit(1)
+	}
+	*index = *index + 1
+	return args[*index]
+}
+
+func parseIntArg(value string, name string) int {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid %s %q: %v\n", name, value, err)
+		os.Exit(1)
+	}
+	return parsed
+}
+
+func saveQueue(method string, url string, queue domain.Queue) {
+	reqBody, err := json.Marshal(queue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error encoding queue request: %v\n", err)
+		os.Exit(1)
+	}
+	req, err := http.NewRequest(method, url, bytes.NewReader(reqBody))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating queue request: %v\n", err)
+		os.Exit(1)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving queue: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", readResponseBody(resp.Body))
+		os.Exit(1)
+	}
+}
+
+func fetchQueueOrExit(name string) domain.Queue {
+	resp, err := http.Get(apiURL + "/api/v1/queues/" + name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error fetching queue: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", readResponseBody(resp.Body))
+		os.Exit(1)
+	}
+	var queue domain.Queue
+	if err := json.NewDecoder(resp.Body).Decode(&queue); err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding queue: %v\n", err)
+		os.Exit(1)
+	}
+	return queue
+}
+
+func queueStatusOrDefault(status domain.QueueStatus) domain.QueueStatus {
+	if status == "" {
+		return domain.QueueStatusActive
+	}
+	return status
+}
+
+func valueOrDash(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 func fetchNodes() ([]*domain.Node, error) {
@@ -698,10 +922,18 @@ func printUsage() {
 	fmt.Println("  jobs submit [options]           Submit a new job")
 	fmt.Println("  jobs list                       List all jobs")
 	fmt.Println("  jobs describe <id>              Describe a specific job")
+	fmt.Println("  jobs start <id>                 Requeue a stopped/terminal job")
+	fmt.Println("  jobs stop <id>                  Stop a queued/running job")
+	fmt.Println("  jobs restart <id>               Stop and requeue a job")
 	fmt.Println("  jobs cancel <id>                Cancel a job")
 	fmt.Println("  jobs logs <id>                  Get job logs")
 	fmt.Println("  queues list                     List all queues")
 	fmt.Println("  queues describe <name>          Describe a specific queue")
+	fmt.Println("  queues create [options]         Create a queue")
+	fmt.Println("  queues update <name> [options]  Update a queue")
+	fmt.Println("  queues pause <name>             Pause scheduling for a queue")
+	fmt.Println("  queues resume <name>            Resume scheduling for a queue")
+	fmt.Println("  queues delete <name>            Delete an inactive queue")
 	fmt.Println()
 	fmt.Println("Job Submit Options:")
 	fmt.Println("  -n, --name string      Job name (required)")
@@ -710,4 +942,16 @@ func printUsage() {
 	fmt.Println("  -g, --gpus int         Number of GPUs (default: 1)")
 	fmt.Println("  -i, --image string     Container image (default: nvidia/cuda:12.0-runtime)")
 	fmt.Println()
+	fmt.Println("Queue Options:")
+	fmt.Println("  -n, --name string              Queue name (create only)")
+	fmt.Println("  --status string                Active or Paused")
+	fmt.Println("  --project string               Owning project")
+	fmt.Println("  --max-gpus int                 Hard GPU quota")
+	fmt.Println("  --soft-gpus int                Soft GPU quota")
+	fmt.Println("  --max-gpus-per-job int         Per-job GPU limit")
+	fmt.Println("  --max-queued-jobs int          Queued job limit")
+	fmt.Println("  --max-running-jobs int         Running job limit")
+	fmt.Println("  --priority int                 Queue priority")
+	fmt.Println("  --allow-burst                  Allow exceeding soft quota")
+	fmt.Println("  --no-allow-burst               Disable soft quota burst")
 }

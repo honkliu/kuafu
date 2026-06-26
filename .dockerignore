@@ -1,0 +1,11 @@
+bin/
+.git/
+.vscode/
+node_modules/
+frontend/node_modules/
+web/node_modules/
+*.exe
+*.md
+docs/
+Dockerfile
+.dockerignore

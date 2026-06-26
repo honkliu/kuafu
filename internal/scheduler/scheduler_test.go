@@ -151,6 +151,76 @@ func TestScheduler_CancelJob(t *testing.T) {
 	}
 }
 
+func TestScheduler_StartStopRestartJob(t *testing.T) {
+	repo := repository.NewMemoryRepository()
+	for i := 0; i < 2; i++ {
+		if err := repo.AddGPU(&domain.GPU{ID: fmt.Sprintf("gpu-%d", i), NodeName: "test-node", Status: domain.GPUStatusAvailable, CreatedAt: time.Now()}); err != nil {
+			t.Fatalf("AddGPU failed: %v", err)
+		}
+	}
+	queue := &domain.Queue{Name: "test-queue", MaxGPUs: 4, JobsQueued: 1}
+	if err := repo.AddQueue(queue); err != nil {
+		t.Fatalf("AddQueue failed: %v", err)
+	}
+	job := &domain.Job{ID: "job-life", Name: "life", Queue: "test-queue", Command: "sleep", GPUCount: 1, Status: domain.JobStatusQueued, SubmittedAt: time.Now()}
+	if err := repo.AddJob(job); err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	sched := NewScheduler(repo)
+
+	if err := sched.StopJob(job.ID); err != nil {
+		t.Fatalf("StopJob failed: %v", err)
+	}
+	stopped, err := repo.GetJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetJob failed: %v", err)
+	}
+	if stopped.Status != domain.JobStatusStopped {
+		t.Fatalf("expected stopped job, got %#v", stopped)
+	}
+	queue, _ = repo.GetQueue("test-queue")
+	if queue.JobsQueued != 0 {
+		t.Fatalf("expected queued counter 0 after stop, got %d", queue.JobsQueued)
+	}
+
+	if err := sched.StartJob(job.ID); err != nil {
+		t.Fatalf("StartJob failed: %v", err)
+	}
+	queued, _ := repo.GetJob(job.ID)
+	if queued.Status != domain.JobStatusQueued {
+		t.Fatalf("expected queued job after start, got %#v", queued)
+	}
+	queue, _ = repo.GetQueue("test-queue")
+	if queue.JobsQueued != 1 {
+		t.Fatalf("expected queued counter 1 after start, got %d", queue.JobsQueued)
+	}
+
+	queued.Status = domain.JobStatusRunning
+	queued.AllocatedGPUs = []string{"gpu-0"}
+	if err := repo.AddJob(queued); err != nil {
+		t.Fatalf("AddJob running failed: %v", err)
+	}
+	queue.JobsQueued = 0
+	queue.JobsRunning = 1
+	if err := repo.AddQueue(queue); err != nil {
+		t.Fatalf("AddQueue counters failed: %v", err)
+	}
+	if err := repo.AllocateGPUs([]string{"gpu-0"}, queued.ID); err != nil {
+		t.Fatalf("AllocateGPUs failed: %v", err)
+	}
+	if err := sched.RestartJob(job.ID); err != nil {
+		t.Fatalf("RestartJob failed: %v", err)
+	}
+	restarted, _ := repo.GetJob(job.ID)
+	if restarted.Status != domain.JobStatusQueued || len(restarted.AllocatedGPUs) != 0 {
+		t.Fatalf("expected restarted queued job without allocations, got %#v", restarted)
+	}
+	gpu, _ := repo.GetGPU("gpu-0")
+	if gpu.Status != domain.GPUStatusAvailable {
+		t.Fatalf("expected GPU released after restart, got %#v", gpu)
+	}
+}
+
 func TestScheduler_FIFO(t *testing.T) {
 	repo := repository.NewMemoryRepository()
 
