@@ -19,6 +19,7 @@ tags:
   - name: health
   - name: inventory
   - name: jobs
+  - name: system
   - name: queues
   - name: reservations
   - name: cluster
@@ -140,6 +141,36 @@ paths:
                 $ref: '#/components/schemas/GPU'
         '404':
           $ref: '#/components/responses/Error'
+  /api/v1/gpu-telemetry:
+    get:
+      tags: [inventory]
+      operationId: getGpuTelemetry
+      description: Live GPU utilization, memory, power, temperature, and process telemetry. Lab/A00 mode reads nvidia-smi and falls back to repository inventory if unavailable.
+      responses:
+        '200':
+          description: GPU telemetry snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GPUTelemetrySnapshot'
+  /api/v1/system/reserved-env:
+    get:
+      tags: [system]
+      operationId: getReservedEnv
+      description: Kuafu system-reserved environment variables injected into rendered distributed task instances. User shared/template env cannot override these names.
+      responses:
+        '200':
+          description: Reserved environment variable catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reservedEnv]
+                properties:
+                  reservedEnv:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ReservedEnvVar'
   /api/v1/jobs:
     get:
       tags: [jobs]
@@ -614,7 +645,7 @@ components:
           format: date-time
     JobSubmitRequest:
       type: object
-      required: [name, queue, command]
+      required: [name, queue]
       properties:
         name:
           type: string
@@ -629,6 +660,21 @@ components:
         gpuCount:
           type: integer
           minimum: 1
+        sharedEnv:
+          type: array
+          description: User-provided shared environment variables. Reserved Kuafu names are rejected.
+          items:
+            $ref: '#/components/schemas/EnvVar'
+        taskTemplates:
+          type: array
+          description: Distributed task templates. When set, Kuafu derives total GPU demand from replicas x GPUCount and renders task instances with system reserved env.
+          items:
+            $ref: '#/components/schemas/TaskTemplate'
+        tasks:
+          type: array
+          description: Optional reviewed rendered task command overrides keyed by rank.
+          items:
+            $ref: '#/components/schemas/TaskInstance'
     Job:
       allOf:
         - $ref: '#/components/schemas/JobSubmitRequest'
@@ -662,6 +708,98 @@ components:
               type: integer
             errorMsg:
               type: string
+            sharedEnv:
+              type: array
+              items:
+                $ref: '#/components/schemas/EnvVar'
+            taskTemplates:
+              type: array
+              items:
+                $ref: '#/components/schemas/TaskTemplate'
+            tasks:
+              type: array
+              items:
+                $ref: '#/components/schemas/TaskInstance'
+    EnvVar:
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+    ReservedEnvVar:
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+        description:
+          type: string
+    TaskTemplate:
+      type: object
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+        replicas:
+          type: integer
+        image:
+          type: string
+        command:
+          type: string
+        gpuCount:
+          type: integer
+        cpuCount:
+          type: integer
+        memoryGb:
+          type: integer
+        startOrdinal:
+          type: integer
+        env:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvVar'
+    TaskInstance:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+        rank:
+          type: integer
+        ordinal:
+          type: integer
+        address:
+          type: string
+        image:
+          type: string
+        command:
+          type: string
+        gpuCount:
+          type: integer
+        cpuCount:
+          type: integer
+        memoryGb:
+          type: integer
+        allocatedGpus:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+        env:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvVar'
+        cpuUsage:
+          type: integer
+        memoryUsedMb:
+          type: integer
     Queue:
       type: object
       properties:
@@ -799,6 +937,56 @@ components:
           type: integer
         health:
           type: string
+    GPUTelemetrySnapshot:
+      type: object
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+        source:
+          type: string
+        error:
+          type: string
+        gpus:
+          type: array
+          items:
+            $ref: '#/components/schemas/GPUTelemetry'
+    GPUTelemetry:
+      type: object
+      properties:
+        index:
+          type: integer
+        uuid:
+          type: string
+        nodeName:
+          type: string
+        name:
+          type: string
+        memoryTotalMb:
+          type: integer
+        memoryUsedMb:
+          type: integer
+        utilization:
+          type: integer
+        powerWatts:
+          type: integer
+        temperatureC:
+          type: integer
+        processes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GPUProcess'
+    GPUProcess:
+      type: object
+      properties:
+        gpuIndex:
+          type: integer
+        pid:
+          type: integer
+        processName:
+          type: string
+        usedMemoryMb:
+          type: integer
     ClusterSummary:
       type: object
       properties:

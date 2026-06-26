@@ -39,12 +39,13 @@ type ReservationCreateRequest struct {
 
 // ReservationCommandRequest is the API payload for preparing a command on reserved nodes.
 type ReservationCommandRequest struct {
-	Image            string   `json:"image"`
-	DockerRunOptions string   `json:"dockerRunOptions,omitempty"`
-	EntryPoint       string   `json:"entryPoint,omitempty"`
-	StartCommand     string   `json:"startCommand"`
-	WorkingDirectory string   `json:"workingDirectory,omitempty"`
-	Environment      []string `json:"environment,omitempty"`
+	Image            string                   `json:"image"`
+	DockerRunOptions string                   `json:"dockerRunOptions,omitempty"`
+	EntryPoint       string                   `json:"entryPoint,omitempty"`
+	StartCommand     string                   `json:"startCommand"`
+	WorkingDirectory string                   `json:"workingDirectory,omitempty"`
+	Environment      []string                 `json:"environment,omitempty"`
+	RenderedCommands []ReservationNodeCommand `json:"renderedCommands,omitempty"`
 }
 
 // ReservationCommand records the per-node command materialized from a request.

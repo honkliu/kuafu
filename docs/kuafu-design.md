@@ -16,6 +16,18 @@ The project should leverage the sample OpenPAI repo at `q:\gitroot\pai` where pr
 
 ## 2. Product Scope
 
+### Model-Serving Recipe Direction
+
+Kuafu should treat high-quality model-serving recipes as a core product workflow. The SGLang GLM-5.2 cookbook is the current reference because it exposes hardware, precision, strategy, node count, image, command flags, benchmark context, and safe command generation in one place.
+
+Initial GLM-5.2 recipes represented in Kuafu's catalog:
+
+- H200 FP8 low-latency: `lmsysorg/sglang:latest`, TP8, EAGLE/MTP `5-1-6`, `--mem-fraction-static 0.8`, `--cuda-graph-max-bs 32`, port `30000`.
+- H200 FP8 balanced: TP8 + DP8, DP-attention, DeepEP, EAGLE/MTP `1-1-2`, `--chunked-prefill-size 32768`, `--max-running-requests 80`.
+- B300/GB300 NVFP4 low-latency: `lmsysorg/sglang:dev-glm52-nvfp4`, `nvidia/GLM-5.2-NVFP4`, TP4, `modelopt_fp4`, large chunked prefill.
+
+Product rule: every generated command must be visible and editable before it can be submitted or recorded. This applies to job submission, model serving, reservation commands, workspace launch, and future admin actions.
+
 ### In Scope
 
 - Kubernetes-based GPU fleet management.

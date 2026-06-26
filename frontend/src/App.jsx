@@ -15,12 +15,12 @@ import AuditView from './views/AuditView.jsx';
 import AdminView from './views/AdminView.jsx';
 import LeaseDrawer from './drawers/LeaseDrawer.jsx';
 import JobDetailDrawer from './drawers/JobDetailDrawer.jsx';
-import { createLease, createLeaseCommand, createQueue, deleteQueue, loadClusterState, loadJobDetail, releaseLease as releaseLeaseApi, runJobAction, submitJob, updateQueue } from './api/client.js';
+import { createLease, createLeaseCommand, createQueue, deleteQueue, loadClusterState, loadGPUTelemetry, loadJobDetail, loadReservedEnv, releaseLease as releaseLeaseApi, runJobAction, submitJob, updateQueue } from './api/client.js';
 import { enrichNodes, isExpired, normalizeQueues } from './utils/selectors.js';
 
 export default function App() {
   const [activeView, setActiveView] = useState('cluster');
-  const [data, setData] = useState({ nodes: [], gpus: [], jobs: [], queues: [], reservations: [] });
+  const [data, setData] = useState({ nodes: [], gpus: [], jobs: [], queues: [], reservations: [], gpuTelemetry: { gpus: [], source: 'loading' }, reservedEnv: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedNodes, setSelectedNodes] = useState([]);
@@ -34,8 +34,8 @@ export default function App() {
     setLoading(true);
     setError('');
     try {
-      const state = await loadClusterState();
-      setData({ ...state, queues: normalizeQueues(state.queues) });
+      const [state, gpuTelemetry, reservedEnv] = await Promise.all([loadClusterState(), loadGPUTelemetry().catch((err) => ({ gpus: [], source: 'unavailable', error: err.message })), loadReservedEnv().catch(() => ({ reservedEnv: [] }))]);
+      setData({ ...state, queues: normalizeQueues(state.queues), gpuTelemetry, reservedEnv: reservedEnv.reservedEnv || [] });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -45,7 +45,7 @@ export default function App() {
 
   useEffect(() => {
     loadAll();
-    const timer = window.setInterval(loadAll, 10000);
+    const timer = window.setInterval(loadAll, 60000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -53,7 +53,7 @@ export default function App() {
     () => data.reservations.filter((reservation) => reservation.status === 'Active' && !isExpired(reservation)),
     [data.reservations],
   );
-  const nodes = useMemo(() => enrichNodes(data.nodes, data.gpus, activeReservations, data.jobs), [data.nodes, data.gpus, activeReservations, data.jobs]);
+  const nodes = useMemo(() => enrichNodes(data.nodes, data.gpus, activeReservations, data.jobs, data.gpuTelemetry.gpus || []), [data.nodes, data.gpus, activeReservations, data.jobs, data.gpuTelemetry]);
   const activeJobs = data.jobs.filter((job) => ['Queued', 'Running'].includes(job.status));
 
   function toggleNode(nodeName) {
@@ -124,11 +124,11 @@ export default function App() {
       <Topbar activeView={activeView} loading={loading} error={error} refresh={loadAll} />
       {activeView === 'cluster' && <ClusterView data={data} nodes={nodes} activeJobs={activeJobs} activeReservations={activeReservations} openLeaseDrawer={openLeaseDrawer} />}
       {activeView === 'nodes' && <NodesView nodes={nodes} selectedNodes={selectedNodes} toggleNode={toggleNode} openLeaseDrawer={openLeaseDrawer} releaseLease={releaseLease} />}
-      {activeView === 'jobs' && <JobsView jobs={data.jobs} queues={data.queues} filters={filters} setFilters={setFilters} openJobDetail={openJobDetail} submitJob={handleSubmitJob} runJobAction={handleJobAction} />}
+      {activeView === 'jobs' && <JobsView jobs={data.jobs} queues={data.queues} reservedEnv={data.reservedEnv} filters={filters} setFilters={setFilters} openJobDetail={openJobDetail} submitJob={handleSubmitJob} runJobAction={handleJobAction} />}
       {activeView === 'queues' && <QueuesView queues={data.queues} jobs={data.jobs} saveQueue={handleSaveQueue} deleteQueue={handleDeleteQueue} />}
       {activeView === 'leases' && <LeasesView reservations={data.reservations} openLeaseDrawer={openLeaseDrawer} releaseLease={releaseLease} />}
       {activeView === 'workspaces' && <WorkspacesView openLeaseDrawer={openLeaseDrawer} />}
-      {activeView === 'monitoring' && <MonitoringView nodes={nodes} gpus={data.gpus} jobs={data.jobs} reservations={activeReservations} />}
+      {activeView === 'monitoring' && <MonitoringView nodes={nodes} gpus={data.gpus} gpuTelemetry={data.gpuTelemetry} jobs={data.jobs} reservations={activeReservations} />}
       {activeView === 'cost' && <CostView jobs={data.jobs} reservations={activeReservations} />}
       {activeView === 'catalog' && <CatalogView />}
       {activeView === 'projects' && <ProjectsView queues={data.queues} />}

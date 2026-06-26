@@ -116,6 +116,7 @@ func (s *Scheduler) tryScheduleJob(job *domain.Job) {
 	for i, gpu := range allocatedGPUs {
 		job.AllocatedGPUs[i] = gpu.ID
 	}
+	assignGPUsToTasks(job)
 	if err := s.repo.AllocateGPUs(job.AllocatedGPUs, job.ID); err != nil {
 		log.Printf("Failed to allocate GPUs to job %s: %v", job.ID, err)
 		return
@@ -123,6 +124,9 @@ func (s *Scheduler) tryScheduleJob(job *domain.Job) {
 
 	// Update job status to running
 	job.Status = domain.JobStatusRunning
+	for index := range job.Tasks {
+		job.Tasks[index].Status = domain.JobStatusRunning
+	}
 	job.StartedAt = time.Now()
 	job.Logs = append(job.Logs, fmt.Sprintf("[%s] Job started with %d GPUs", time.Now().Format("15:04:05"), job.GPUCount))
 	if err := s.repo.AddJob(job); err != nil {
@@ -193,6 +197,9 @@ func (s *Scheduler) executeJob(job *domain.Job) {
 	}
 
 	currentJob.Status = status
+	for index := range currentJob.Tasks {
+		currentJob.Tasks[index].Status = status
+	}
 	currentJob.CompletedAt = time.Now()
 	currentJob.ExitCode = &exitCode
 	if err := s.repo.AddJob(currentJob); err != nil {
@@ -232,6 +239,28 @@ func nonEmptyGPUIDs(gpuIDs []string) []string {
 	return filtered
 }
 
+func assignGPUsToTasks(job *domain.Job) {
+	if len(job.Tasks) == 0 || len(job.AllocatedGPUs) == 0 {
+		return
+	}
+	nextGPU := 0
+	for taskIndex := range job.Tasks {
+		count := job.Tasks[taskIndex].GPUCount
+		if count <= 0 {
+			count = 1
+		}
+		if nextGPU >= len(job.AllocatedGPUs) {
+			return
+		}
+		end := nextGPU + count
+		if end > len(job.AllocatedGPUs) {
+			end = len(job.AllocatedGPUs)
+		}
+		job.Tasks[taskIndex].AllocatedGPUs = append([]string(nil), job.AllocatedGPUs[nextGPU:end]...)
+		nextGPU = end
+	}
+}
+
 func (s *Scheduler) checkRunningJobs() {
 	// This method can be extended to check for stuck jobs, timeouts, etc.
 	// For now, execution is handled in executeJob goroutines
@@ -261,6 +290,9 @@ func (s *Scheduler) CancelJob(jobID string) error {
 
 	// Update job status
 	job.Status = domain.JobStatusCanceled
+	for index := range job.Tasks {
+		job.Tasks[index].Status = domain.JobStatusCanceled
+	}
 	job.CompletedAt = time.Now()
 	job.Logs = append(job.Logs, fmt.Sprintf("[%s] Job canceled by user", time.Now().Format("15:04:05")))
 	if err := s.repo.AddJob(job); err != nil {
@@ -316,6 +348,10 @@ func (s *Scheduler) StartJob(jobID string) error {
 		job.Status = domain.JobStatusQueued
 		job.RuntimeID = ""
 		job.AllocatedGPUs = nil
+		for index := range job.Tasks {
+			job.Tasks[index].AllocatedGPUs = nil
+			job.Tasks[index].Status = domain.JobStatusQueued
+		}
 		job.StartedAt = time.Time{}
 		job.CompletedAt = time.Time{}
 		job.ExitCode = nil
@@ -365,6 +401,10 @@ func (s *Scheduler) RestartJob(jobID string) error {
 	job.Status = domain.JobStatusQueued
 	job.RuntimeID = ""
 	job.AllocatedGPUs = nil
+	for index := range job.Tasks {
+		job.Tasks[index].AllocatedGPUs = nil
+		job.Tasks[index].Status = domain.JobStatusQueued
+	}
 	job.StartedAt = time.Time{}
 	job.CompletedAt = time.Time{}
 	job.ExitCode = nil
@@ -410,6 +450,10 @@ func (s *Scheduler) stopJob(jobID string, status domain.JobStatus, message strin
 		return err
 	}
 	job.Status = status
+	for index := range job.Tasks {
+		job.Tasks[index].Status = status
+		job.Tasks[index].AllocatedGPUs = nil
+	}
 	job.CompletedAt = time.Now()
 	job.AllocatedGPUs = nil
 	job.Logs = append(job.Logs, fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), message))

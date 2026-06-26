@@ -57,6 +57,22 @@ Acceptance criteria:
 - Production mode fails fast if Kubernetes/MongoDB config is missing.
 - Tests cover lab mode and production-mode config validation separately.
 
+### P0-5: Model-Serving Recipe Catalog
+
+Owner: PM, Researcher, GPU Architect, Frontend Developer, Backend Developer  
+Depends on: current React catalog and job preview workflow  
+Outcome: Kuafu can launch professional LLM serving workloads from reviewed templates instead of hand-written shell snippets.
+
+Acceptance criteria:
+
+- Catalog includes SGLang-style recipes for GLM-5.2 FP8 low-latency, GLM-5.2 FP8 balanced, and Blackwell NVFP4 serving.
+- Each recipe surfaces image, GPU count, target hardware, strategy, precision, and exact launch command.
+- Job submit flow requires command preview and permits editing before execution.
+- Reservation command flow requires per-node final command preview and permits editing before recording/execution.
+- Future runtime integration maps these templates to Kubernetes pods/services with exposed OpenAI-compatible endpoints and health checks.
+
+PM direction: model-serving recipes are a first-class product surface, not examples buried in docs. Researcher continuously tracks SGLang/vLLM/TGI/LMDeploy recipes; Architect maps recipe knobs to scheduler/runtime abstractions; Frontend/Backend keep the command-review gate mandatory for every execution path.
+
 ## P1: Scheduler And Runtime
 
 ### P1-1: FrameworkController Spike

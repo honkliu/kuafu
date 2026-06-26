@@ -156,6 +156,58 @@ func TestListGPUs(t *testing.T) {
 	}
 }
 
+func TestGPUTelemetryFallback(t *testing.T) {
+	server := setupTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gpu-telemetry", nil)
+	w := httptest.NewRecorder()
+
+	server.handleGPUTelemetry(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	var response domain.GPUUsageSnapshot
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if len(response.GPUs) == 0 {
+		t.Fatalf("expected telemetry fallback GPUs, got %#v", response)
+	}
+	if response.Source == "" {
+		t.Fatalf("expected telemetry source, got %#v", response)
+	}
+}
+
+func TestReservedEnvCatalog(t *testing.T) {
+	server := setupTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/reserved-env", nil)
+	w := httptest.NewRecorder()
+
+	server.handleReservedEnv(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	var response struct {
+		ReservedEnv []domain.ReservedEnvVar `json:"reservedEnv"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if len(response.ReservedEnv) == 0 {
+		t.Fatalf("expected reserved env catalog")
+	}
+	foundRank := false
+	foundTask0 := false
+	for _, item := range response.ReservedEnv {
+		foundRank = foundRank || item.Name == "RANK"
+		foundTask0 = foundTask0 || item.Name == "TASK0_ADDRESS"
+	}
+	if !foundRank || !foundTask0 {
+		t.Fatalf("reserved env catalog missing RANK or TASK0_ADDRESS: %#v", response.ReservedEnv)
+	}
+}
+
 func TestGetGPU(t *testing.T) {
 	server := setupTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/gpus/A00-GPU-0", nil)
@@ -222,6 +274,112 @@ func TestSubmitJob(t *testing.T) {
 	}
 	if job.Status != domain.JobStatusQueued {
 		t.Errorf("Expected status Queued, got %s", job.Status)
+	}
+	if len(job.Tasks) != 2 || job.Tasks[0].Role != "master" || job.Tasks[1].Role != "worker" {
+		t.Fatalf("expected command job to normalize to master/worker task plan, got %#v", job.Tasks)
+	}
+	if job.GPUCount != 1 || job.Tasks[0].GPUCount != 1 || job.Tasks[1].GPUCount != 0 {
+		t.Fatalf("expected GPU demand to stay 1 with zero-GPU worker control task, got job=%d tasks=%#v", job.GPUCount, job.Tasks)
+	}
+}
+
+func TestSubmitDistributedJobRendersTaskReservedEnv(t *testing.T) {
+	server := setupTestServer(t)
+	reqBody := domain.JobSubmitRequest{
+		Name:     "glm52-dist",
+		Queue:    "default",
+		Command:  "sglang serve",
+		GPUCount: 2,
+		SharedEnv: []domain.EnvVar{{Name: "MODEL_PATH", Value: "zai-org/GLM-5.2-FP8"}},
+		TaskTemplates: []domain.TaskTemplate{
+			{Name: "master", Role: "master", Replicas: 1, Command: "sglang serve --model-path $MODEL_PATH --node-rank $RANK --dist-init-addr $TASK0_ADDRESS:20000", GPUCount: 1},
+			{Name: "worker", Role: "worker", Replicas: 1, Command: "sglang serve --model-path $MODEL_PATH --node-rank $RANK --dist-init-addr $TASK0_ADDRESS:20000", GPUCount: 1},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleJobs(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("Expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var job domain.Job
+	if err := json.NewDecoder(w.Body).Decode(&job); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if len(job.Tasks) != 2 {
+		t.Fatalf("expected 2 rendered tasks, got %#v", job.Tasks)
+	}
+	if job.Tasks[0].Rank != 0 || job.Tasks[1].Rank != 1 {
+		t.Fatalf("expected ranks 0 and 1, got %#v", job.Tasks)
+	}
+	if !strings.Contains(job.Tasks[0].Command, "--node-rank 0") || !strings.Contains(job.Tasks[1].Command, "--node-rank 1") {
+		t.Fatalf("commands did not render rank variables: %#v", job.Tasks)
+	}
+	if !strings.Contains(job.Tasks[0].Command, "glm52-dist-task-0:20000") || !strings.Contains(job.Tasks[1].Command, "glm52-dist-task-0:20000") {
+		t.Fatalf("commands did not render shared master address: %#v", job.Tasks)
+	}
+}
+
+func TestSubmitDistributedJobRejectsReservedEnvOverride(t *testing.T) {
+	server := setupTestServer(t)
+	reqBody := domain.JobSubmitRequest{
+		Name:      "bad-env",
+		Queue:     "default",
+		Command:   "echo no",
+		GPUCount:  1,
+		SharedEnv: []domain.EnvVar{{Name: "RANK", Value: "7"}},
+		TaskTemplates: []domain.TaskTemplate{
+			{Name: "worker", Role: "worker", Replicas: 1, Command: "echo $RANK", GPUCount: 1},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleJobs(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "reserved environment variable") {
+		t.Fatalf("expected reserved env error, got %s", w.Body.String())
+	}
+}
+
+func TestSubmitDistributedJobAcceptsReviewedTaskCommands(t *testing.T) {
+	server := setupTestServer(t)
+	reqBody := domain.JobSubmitRequest{
+		Name:     "reviewed-dist",
+		Queue:    "default",
+		Command:  "sglang serve",
+		GPUCount: 2,
+		TaskTemplates: []domain.TaskTemplate{
+			{Name: "master", Role: "master", Replicas: 1, Command: "rank $RANK", GPUCount: 1},
+			{Name: "worker", Role: "worker", Replicas: 1, Command: "rank $RANK", GPUCount: 1},
+		},
+		Tasks: []domain.TaskInstance{
+			{Rank: 0, Command: "reviewed master --node-rank 0"},
+			{Rank: 1, Command: "reviewed worker --node-rank 1"},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleJobs(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("Expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var job domain.Job
+	if err := json.NewDecoder(w.Body).Decode(&job); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if job.Tasks[0].Command != "reviewed master --node-rank 0" || job.Tasks[1].Command != "reviewed worker --node-rank 1" {
+		t.Fatalf("reviewed commands were not preserved: %#v", job.Tasks)
 	}
 }
 
@@ -556,6 +714,52 @@ func TestCreateReservationAndCommand(t *testing.T) {
 	}
 	if !strings.Contains(command.RenderedCommands[0].Command, "--gpus all") {
 		t.Fatalf("expected docker options in rendered command, got %s", command.RenderedCommands[0].Command)
+	}
+}
+
+func TestCreateReservationCommandAcceptsReviewedCommandOverrides(t *testing.T) {
+	server := setupTestServer(t)
+
+	createReq := domain.ReservationCreateRequest{Name: "reviewed", NodeNames: []string{"A00", "A01"}}
+	body, err := json.Marshal(createReq)
+	if err != nil {
+		t.Fatalf("Marshal reservation failed: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/reservations", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	server.handleReservations(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected reservation create 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var reservation domain.NodeReservation
+	if err := json.NewDecoder(w.Body).Decode(&reservation); err != nil {
+		t.Fatalf("Decode reservation failed: %v", err)
+	}
+
+	commandReq := domain.ReservationCommandRequest{
+		Image:        "ubuntu:22.04",
+		StartCommand: "bash -lc 'echo default'",
+		RenderedCommands: []domain.ReservationNodeCommand{
+			{NodeName: "A00", Command: "docker run reviewed-a00"},
+			{NodeName: "A01", Command: "docker run reviewed-a01"},
+		},
+	}
+	body, err = json.Marshal(commandReq)
+	if err != nil {
+		t.Fatalf("Marshal command failed: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/reservations/"+reservation.ID+"/commands", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	server.handleReservationDetail(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected command create 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var command domain.ReservationCommand
+	if err := json.NewDecoder(w.Body).Decode(&command); err != nil {
+		t.Fatalf("Decode command failed: %v", err)
+	}
+	if command.RenderedCommands[0].Command != "docker run reviewed-a00" || command.RenderedCommands[1].Command != "docker run reviewed-a01" {
+		t.Fatalf("expected reviewed command overrides, got %#v", command.RenderedCommands)
 	}
 }
 

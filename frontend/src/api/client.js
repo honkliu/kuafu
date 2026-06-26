@@ -27,6 +27,14 @@ export async function loadClusterState() {
   };
 }
 
+export function loadGPUTelemetry() {
+  return api('/api/v1/gpu-telemetry');
+}
+
+export function loadReservedEnv() {
+  return api('/api/v1/system/reserved-env');
+}
+
 export function createLease(payload) {
   return api('/api/v1/reservations', {
     method: 'POST',

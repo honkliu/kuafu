@@ -20,6 +20,7 @@ func TestOpenAPIListsRegisteredRoutes(t *testing.T) {
 		"/api/v1/nodes/{name}:",
 		"/api/v1/gpus:",
 		"/api/v1/gpus/{id}:",
+		"/api/v1/gpu-telemetry:",
 		"/api/v1/jobs:",
 		"/api/v1/jobs/{id}:",
 		"/api/v1/jobs/{id}/start:",

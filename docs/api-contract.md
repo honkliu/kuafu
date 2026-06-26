@@ -16,7 +16,10 @@ It documents:
 
 - Health and readiness endpoints.
 - Node and GPU inventory endpoints.
+- Live GPU telemetry endpoint backed by `nvidia-smi` in lab/A00 mode with repository fallback.
+- System reserved environment variable catalog for distributed task templates.
 - Job submit/list/detail/start/stop/restart/cancel/log endpoints.
+- Every job is represented as a distributed task plan with master/worker roles, shared user env, reviewed per-task commands, and Kuafu-injected reserved env (`RANK`, `TASK0_ADDRESS`, `WORLD_SIZE`, `MASTER_ADDRESS`, `MASTER_PORT`, etc.). User-provided env cannot override reserved names. Legacy single-command submissions are normalized into a master/worker task plan.
 - Job GPU metrics endpoint for current allocated GPU usage snapshots.
 - Node reservation endpoints and lab-mode reserved-node Docker command rendering.
 - Queue create/list/detail/update/delete endpoints, including Active/Paused scheduling state.

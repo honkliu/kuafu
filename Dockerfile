@@ -25,18 +25,21 @@ COPY . .
 RUN go build -o /app/kuafu-server ./cmd/kuafu-server
 RUN go build -o /app/kuafu ./cmd/kuafu
 
-# Runtime stage
-FROM alpine:latest
+# Runtime stage. Use glibc so NVIDIA container runtime injected tools such as
+# nvidia-smi can execute for live GPU telemetry.
+FROM debian:bookworm-slim
 
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Copy binaries from builder
 COPY --from=builder /app/kuafu-server .
 COPY --from=builder /app/kuafu .
 COPY --from=web-builder /workspace/web ./web
 
-# Expose API port
-EXPOSE 8080
+# Expose API ports used by local lab mode and A00 lab mode.
+EXPOSE 8080 30000
 
 # Default command runs the explicit lab prototype.
 CMD ["/app/kuafu-server", "--mode", "lab"]

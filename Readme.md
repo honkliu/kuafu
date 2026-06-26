@@ -84,10 +84,12 @@ The console provides:
 
 - **Cluster overview** with real-time metrics (nodes, GPUs, jobs, queues)
 - **Node inventory table** with status, free/allocated GPU counts, reservation state, and reserve actions
+- **Live GPU telemetry** sourced from `nvidia-smi` on A00, refreshed every minute so non-Kuafu workloads such as ComfyUI are visible
 - **Node reservation drawer** launched from the Nodes page, with multi-node selection, duration/owner fields, and reserved-node command rendering
 - **Lease platform views** for Workspaces, Monitoring, Cost, Catalog, Projects, Audit, and Admin, with runtime-dependent items marked as pending instead of faked
 - **GPU inventory table** with allocation status
-- **Job management** with submission, filters, start/stop/restart/cancel actions, and running/completed job details
+- **Job management** with submission, filters, start/stop/restart/cancel actions, running/completed job details, and mandatory editable command preview before submit
+- **Model-serving templates** inspired by SGLang GLM-5.2 recipes, including H200 FP8 low-latency/balanced and Blackwell NVFP4 serving commands
 - **Job detail drawer** showing submitted spec, exact runtime command, logs, allocated GPUs/nodes, and GPU usage snapshot
 - **Queue management** with create/edit/delete, Active/Paused scheduling state, hard/soft quotas, per-job limits, queue depth limits, priority, and burst policy
 - **Job submission form** for quick testing
@@ -154,6 +156,7 @@ kuafu/
 | `GET /api/v1/nodes`                              | List all nodes                      |
 | `GET /api/v1/nodes/{name}`                       | Get node details                    |
 | `GET /api/v1/gpus`                               | List all GPUs                       |
+| `GET /api/v1/gpu-telemetry`                      | Live GPU utilization/memory/process telemetry |
 | `GET /api/v1/gpus/{id}`                          | Get GPU details                     |
 | `GET /api/v1/jobs`                               | List all jobs                       |
 | `POST /api/v1/jobs`                              | Submit a new job                    |

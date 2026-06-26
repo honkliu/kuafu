@@ -2,11 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +45,8 @@ func NewServer(repo repository.Repository, sched *scheduler.Scheduler, addr stri
 	mux.HandleFunc("/api/v1/nodes/", s.handleNode)
 	mux.HandleFunc("/api/v1/gpus", s.handleGPUs)
 	mux.HandleFunc("/api/v1/gpus/", s.handleGPU)
+	mux.HandleFunc("/api/v1/gpu-telemetry", s.handleGPUTelemetry)
+	mux.HandleFunc("/api/v1/system/reserved-env", s.handleReservedEnv)
 	mux.HandleFunc("/api/v1/jobs", s.handleJobs)
 	mux.HandleFunc("/api/v1/jobs/", s.handleJobDetail)
 	mux.HandleFunc("/api/v1/queues", s.handleQueues)
@@ -62,6 +67,136 @@ func NewServer(repo repository.Repository, sched *scheduler.Scheduler, addr stri
 	}
 
 	return s
+}
+
+func (s *Server) handleGPUTelemetry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	snapshot, err := collectNvidiaSMITelemetry()
+	if err != nil {
+		snapshot = fallbackRepositoryTelemetry(s.repo, err)
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) handleReservedEnv(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"reservedEnv": reservedEnvCatalog()})
+}
+
+func collectNvidiaSMITelemetry() (*domain.GPUUsageSnapshot, error) {
+	query := "index,uuid,name,memory.total,memory.used,utilization.gpu,power.draw,temperature.gpu"
+	output, err := exec.Command("nvidia-smi", "--query-gpu="+query, "--format=csv,noheader,nounits").Output()
+	if err != nil {
+		return nil, err
+	}
+	reader := csv.NewReader(strings.NewReader(string(output)))
+	reader.TrimLeadingSpace = true
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	usage := make([]domain.GPUUsage, 0, len(records))
+	for _, record := range records {
+		if len(record) < 8 {
+			continue
+		}
+		index := atoiSafe(record[0])
+		usage = append(usage, domain.GPUUsage{
+			Index:         index,
+			UUID:          strings.TrimSpace(record[1]),
+			NodeName:      "A00",
+			Name:          strings.TrimSpace(record[2]),
+			MemoryTotalMB: atoiSafe(record[3]),
+			MemoryUsedMB:  atoiSafe(record[4]),
+			Utilization:   atoiSafe(record[5]),
+			PowerWatts:    atoiSafe(record[6]),
+			TemperatureC:  atoiSafe(record[7]),
+		})
+	}
+	uuidToIndex := make(map[string]int, len(usage))
+	for _, gpu := range usage {
+		uuidToIndex[gpu.UUID] = gpu.Index
+	}
+	processes := collectNvidiaSMIProcesses(uuidToIndex)
+	for index := range usage {
+		usage[index].Processes = processes[usage[index].Index]
+	}
+	return &domain.GPUUsageSnapshot{GeneratedAt: time.Now(), Source: "nvidia-smi", GPUs: usage}, nil
+}
+
+func collectNvidiaSMIProcesses(uuidToIndex map[string]int) map[int][]domain.GPUProcess {
+	processes := map[int][]domain.GPUProcess{}
+	query := "gpu_uuid,pid,process_name,used_memory"
+	output, err := exec.Command("nvidia-smi", "--query-compute-apps="+query, "--format=csv,noheader,nounits").Output()
+	if err != nil {
+		return processes
+	}
+	reader := csv.NewReader(strings.NewReader(string(output)))
+	reader.TrimLeadingSpace = true
+	records, err := reader.ReadAll()
+	if err != nil {
+		return processes
+	}
+	for _, record := range records {
+		if len(record) < 4 {
+			continue
+		}
+		gpuUUID := strings.TrimSpace(record[0])
+		gpuIndex, exists := uuidToIndex[gpuUUID]
+		if !exists {
+			continue
+		}
+		processes[gpuIndex] = append(processes[gpuIndex], domain.GPUProcess{
+			GPUIndex:     gpuIndex,
+			GPUUUID:      gpuUUID,
+			PID:          atoiSafe(record[1]),
+			ProcessName:  strings.TrimSpace(record[2]),
+			UsedMemoryMB: atoiSafe(record[3]),
+		})
+	}
+	return processes
+}
+
+func fallbackRepositoryTelemetry(repo repository.Repository, sourceErr error) *domain.GPUUsageSnapshot {
+	gpus, err := repo.ListGPUs("")
+	if err != nil {
+		return &domain.GPUUsageSnapshot{GeneratedAt: time.Now(), Source: "repository", Error: sourceErr.Error() + "; " + err.Error()}
+	}
+	usage := make([]domain.GPUUsage, 0, len(gpus))
+	for _, gpu := range gpus {
+		usage = append(usage, domain.GPUUsage{
+			Index:         gpu.Index,
+			UUID:          gpu.UUID,
+			NodeName:      gpu.NodeName,
+			Name:          gpu.Model,
+			MemoryTotalMB: gpu.MemoryMB,
+			MemoryUsedMB:  0,
+			Utilization:   0,
+		})
+	}
+	return &domain.GPUUsageSnapshot{GeneratedAt: time.Now(), Source: "repository", GPUs: usage, Error: sourceErr.Error()}
+}
+
+func atoiSafe(value string) int {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "N/A") || strings.EqualFold(value, "[Not Supported]") {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err == nil {
+		return parsed
+	}
+	floatParsed, err := strconv.ParseFloat(value, 64)
+	if err == nil {
+		return int(floatParsed)
+	}
+	return 0
 }
 
 func (s *Server) SetAuthenticator(authenticator auth.Authenticator) {
@@ -213,13 +348,23 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate required fields
-	if req.Name == "" || req.Queue == "" || req.Command == "" {
-		writeError(w, "name, queue, and command are required", http.StatusBadRequest)
+	if req.Name == "" || req.Queue == "" || (req.Command == "" && len(req.TaskTemplates) == 0) {
+		writeError(w, "name, queue, and command or taskTemplates are required", http.StatusBadRequest)
 		return
 	}
 
+	if len(req.TaskTemplates) > 0 {
+		req.GPUCount = totalRequestedGPUs(req)
+	}
 	if req.GPUCount <= 0 {
-		req.GPUCount = 1
+		req.GPUCount = totalRequestedGPUs(req)
+		if req.GPUCount <= 0 {
+			req.GPUCount = 1
+		}
+	}
+	if err := validateUserEnv(req.SharedEnv, req.TaskTemplates); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	if req.Project != "" {
 		user, err := s.auth.Authenticate(r)
@@ -254,8 +399,12 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 		GPUCount:    req.GPUCount,
 		Status:      domain.JobStatusQueued,
 		SubmittedAt: time.Now(),
+		TaskTemplates: normalizeTaskTemplates(req),
+		SharedEnv:     normalizeEnv(req.SharedEnv),
 		Logs:        []string{fmt.Sprintf("[%s] Job submitted to queue %s", time.Now().Format("15:04:05"), req.Queue)},
 	}
+	job.Tasks = renderTaskInstances(job)
+	applyReviewedTasks(job.Tasks, req.Tasks)
 
 	jobs, err := s.repo.ListJobs()
 	if err != nil {
@@ -280,6 +429,209 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, job)
+}
+
+func totalRequestedGPUs(req domain.JobSubmitRequest) int {
+	if len(req.TaskTemplates) == 0 {
+		return req.GPUCount
+	}
+	total := 0
+	for _, template := range req.TaskTemplates {
+		replicas := template.Replicas
+		if replicas <= 0 {
+			replicas = 1
+		}
+		gpuCount := template.GPUCount
+		if gpuCount < 0 {
+			gpuCount = 0
+		}
+		total += replicas * gpuCount
+	}
+	return total
+}
+
+func normalizeTaskTemplates(req domain.JobSubmitRequest) []domain.TaskTemplate {
+	if len(req.TaskTemplates) > 0 {
+		templates := make([]domain.TaskTemplate, 0, len(req.TaskTemplates))
+		for index, template := range req.TaskTemplates {
+			template.Name = strings.TrimSpace(template.Name)
+			if template.Name == "" {
+				template.Name = fmt.Sprintf("task%d", index)
+			}
+			template.Role = strings.TrimSpace(template.Role)
+			if template.Role == "" {
+				template.Role = template.Name
+			}
+			if template.Replicas <= 0 {
+				template.Replicas = 1
+			}
+			if template.Image == "" {
+				template.Image = req.Image
+			}
+			if template.Command == "" {
+				template.Command = req.Command
+			}
+			if template.GPUCount < 0 {
+				template.GPUCount = 0
+			}
+			template.Env = normalizeEnv(template.Env)
+			templates = append(templates, template)
+		}
+		return templates
+	}
+	return []domain.TaskTemplate{
+		{Name: "master", Role: "master", Replicas: 1, Image: req.Image, Command: req.Command, GPUCount: req.GPUCount},
+		{Name: "worker", Role: "worker", Replicas: 1, Image: req.Image, Command: req.Command, GPUCount: 0},
+	}
+}
+
+func normalizeEnv(values []domain.EnvVar) []domain.EnvVar {
+	env := make([]domain.EnvVar, 0, len(values))
+	for _, value := range values {
+		name := strings.TrimSpace(value.Name)
+		if name == "" {
+			continue
+		}
+		env = append(env, domain.EnvVar{Name: name, Value: strings.TrimSpace(value.Value)})
+	}
+	return env
+}
+
+func validateUserEnv(shared []domain.EnvVar, templates []domain.TaskTemplate) error {
+	for _, item := range shared {
+		if isReservedEnvName(item.Name) {
+			return fmt.Errorf("%s is a Kuafu reserved environment variable and cannot be set by users", item.Name)
+		}
+	}
+	for _, template := range templates {
+		for _, item := range template.Env {
+			if isReservedEnvName(item.Name) {
+				return fmt.Errorf("%s is a Kuafu reserved environment variable and cannot be set by users", item.Name)
+			}
+		}
+	}
+	return nil
+}
+
+func renderTaskInstances(job *domain.Job) []domain.TaskInstance {
+	worldSize := 0
+	for _, template := range job.TaskTemplates {
+		worldSize += template.Replicas
+	}
+	if worldSize <= 0 {
+		worldSize = 1
+	}
+	globalRank := 0
+	addresses := make(map[int]string, worldSize)
+	for rank := 0; rank < worldSize; rank++ {
+		addresses[rank] = fmt.Sprintf("%s-task-%d", job.Name, rank)
+	}
+	tasks := make([]domain.TaskInstance, 0, worldSize)
+	for _, template := range job.TaskTemplates {
+		for ordinal := 0; ordinal < template.Replicas; ordinal++ {
+			rank := globalRank
+			if template.StartOrdinal > 0 {
+				rank = template.StartOrdinal + ordinal
+			}
+			env := mergeTaskEnv(job.SharedEnv, template.Env, reservedTaskEnv(rank, ordinal, template.Role, worldSize, addresses))
+			tasks = append(tasks, domain.TaskInstance{
+				ID:       fmt.Sprintf("%s-task-%d", job.ID, rank),
+				Name:     fmt.Sprintf("%s-%d", template.Name, ordinal),
+				Role:     template.Role,
+				Rank:     rank,
+				Ordinal:  ordinal,
+				Address:  addresses[rank],
+				Image:    template.Image,
+				Command:  renderTemplateCommand(template.Command, env),
+				GPUCount: template.GPUCount,
+				CPUCount: template.CPUCount,
+				MemoryGB: template.MemoryGB,
+				Status:   job.Status,
+				Env:      env,
+			})
+			globalRank++
+		}
+	}
+	return tasks
+}
+
+func applyReviewedTasks(tasks []domain.TaskInstance, reviewed []domain.TaskInstance) {
+	if len(reviewed) == 0 {
+		return
+	}
+	byRank := map[int]domain.TaskInstance{}
+	for _, task := range reviewed {
+		byRank[task.Rank] = task
+	}
+	for index := range tasks {
+		if reviewedTask, ok := byRank[tasks[index].Rank]; ok && strings.TrimSpace(reviewedTask.Command) != "" {
+			tasks[index].Command = reviewedTask.Command
+		}
+	}
+}
+
+func reservedTaskEnv(rank int, ordinal int, role string, worldSize int, addresses map[int]string) []domain.EnvVar {
+	return []domain.EnvVar{
+		{Name: "RANK", Value: strconv.Itoa(rank)},
+		{Name: "TASK_RANK", Value: strconv.Itoa(rank)},
+		{Name: "TASK_INDEX", Value: strconv.Itoa(rank)},
+		{Name: "TASK_ORDINAL", Value: strconv.Itoa(ordinal)},
+		{Name: "TASK_ROLE", Value: role},
+		{Name: "WORLD_SIZE", Value: strconv.Itoa(worldSize)},
+		{Name: "TASK0_ADDRESS", Value: addresses[0]},
+		{Name: "MASTER_ADDRESS", Value: addresses[0]},
+		{Name: "MASTER_PORT", Value: "20000"},
+		{Name: "KUAFU_TASK_ADDRESS", Value: addresses[rank]},
+	}
+}
+
+func reservedEnvCatalog() []domain.ReservedEnvVar {
+	return []domain.ReservedEnvVar{
+		{Name: "RANK", Description: "Global zero-based task rank. Master is rank 0 by convention."},
+		{Name: "TASK_RANK", Description: "Alias of RANK for launchers that prefer task-scoped naming."},
+		{Name: "TASK_INDEX", Description: "Alias of RANK; useful for templates that need a unique per-task number."},
+		{Name: "TASK_ORDINAL", Description: "Zero-based replica index within the task template role."},
+		{Name: "TASK_ROLE", Description: "Task template role, such as master or worker."},
+		{Name: "WORLD_SIZE", Description: "Total rendered task count across all templates."},
+		{Name: "TASK0_ADDRESS", Description: "Stable address for rank 0; use as the default distributed rendezvous host."},
+		{Name: "MASTER_ADDRESS", Description: "Alias of TASK0_ADDRESS."},
+		{Name: "MASTER_PORT", Value: "20000", Description: "Default distributed rendezvous port selected by Kuafu."},
+		{Name: "KUAFU_TASK_ADDRESS", Description: "Stable address assigned to this task instance."},
+	}
+}
+
+func isReservedEnvName(name string) bool {
+	name = strings.ToUpper(strings.TrimSpace(name))
+	for _, item := range reservedEnvCatalog() {
+		if item.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeTaskEnv(groups ...[]domain.EnvVar) []domain.EnvVar {
+	merged := []domain.EnvVar{}
+	seen := map[string]int{}
+	for _, group := range groups {
+		for _, item := range group {
+			if idx, ok := seen[item.Name]; ok {
+				merged[idx] = item
+				continue
+			}
+			seen[item.Name] = len(merged)
+			merged = append(merged, item)
+		}
+	}
+	return merged
+}
+
+func renderTemplateCommand(command string, env []domain.EnvVar) string {
+	for _, item := range env {
+		command = strings.ReplaceAll(command, "$"+item.Name, item.Value)
+		command = strings.ReplaceAll(command, "${"+item.Name+"}", item.Value)
+	}
+	return command
 }
 
 func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
@@ -604,12 +956,49 @@ func (s *Server) createReservationCommand(w http.ResponseWriter, r *http.Request
 		},
 	}
 	command.RenderedCommands = renderReservationNodeCommands(reservation.NodeNames, command)
+	if len(req.RenderedCommands) > 0 {
+		overrides, err := normalizeReservationCommandOverrides(reservation.NodeNames, req.RenderedCommands)
+		if err != nil {
+			writeError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		command.RenderedCommands = overrides
+	}
 	reservation.Commands = append(reservation.Commands, command)
 	if err := s.repo.AddReservation(reservation); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, command)
+}
+
+func normalizeReservationCommandOverrides(nodeNames []string, commands []domain.ReservationNodeCommand) ([]domain.ReservationNodeCommand, error) {
+	wanted := stringSet(nodeNames)
+	seen := make(map[string]bool, len(commands))
+	normalizedByNode := make(map[string]domain.ReservationNodeCommand, len(commands))
+	for _, command := range commands {
+		nodeName := strings.TrimSpace(command.NodeName)
+		text := strings.TrimSpace(command.Command)
+		if nodeName == "" || text == "" {
+			return nil, fmt.Errorf("rendered command nodeName and command are required")
+		}
+		if !wanted[nodeName] {
+			return nil, fmt.Errorf("rendered command targets node %s outside reservation", nodeName)
+		}
+		if seen[nodeName] {
+			return nil, fmt.Errorf("duplicate rendered command for node %s", nodeName)
+		}
+		seen[nodeName] = true
+		normalizedByNode[nodeName] = domain.ReservationNodeCommand{NodeName: nodeName, Command: text}
+	}
+	if len(seen) != len(wanted) {
+		return nil, fmt.Errorf("rendered command must be provided for every reserved node")
+	}
+	normalized := make([]domain.ReservationNodeCommand, 0, len(nodeNames))
+	for _, nodeName := range nodeNames {
+		normalized = append(normalized, normalizedByNode[nodeName])
+	}
+	return normalized, nil
 }
 
 func (s *Server) activeReservationConflict(currentID string, nodeNames []string) string {

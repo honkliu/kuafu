@@ -357,12 +357,15 @@ button:disabled {
 .status-ready,
 .status-running,
 .status-available,
-.status-active {
+.status-active,
+.status-idle,
+.status-nvidia-smi {
   background: #dcfce7;
   color: #166534;
 }
 
 .status-reserved,
+.status-busy,
 .status-leased,
 .status-queued,
 .status-allocated,
@@ -391,9 +394,204 @@ button:disabled {
 .status-completed,
 .status-released,
 .status-stopped,
+.status-repository,
+.status-unavailable,
 .status-unknown {
   background: #e2e8f0;
   color: #334155;
+}
+
+.telemetry-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.node-monitor-grid,
+.task-template-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.node-monitor-card,
+.task-template-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.node-monitor-card > div:first-child,
+.task-template-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-template-header {
+  grid-column: 1 / -1;
+  min-height: 38px;
+}
+
+.task-template-header span {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.task-template-card {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.task-template-card label {
+  color: var(--slate);
+  display: grid;
+  font-size: 0.82rem;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.task-template-card input,
+.task-template-card textarea {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 11px;
+}
+
+.task-template-card textarea {
+  font-family: Consolas, 'Liberation Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.task-template-card .full-span {
+  grid-column: 1 / -1;
+}
+
+.inherited-command {
+  background: #f8fafc;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
+.inherited-command span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.inherited-command code {
+  color: var(--slate);
+  font-family: Consolas, 'Liberation Mono', monospace;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.gpu-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gpu-chip {
+  background: #e2e8f0;
+  border-radius: 999px;
+  color: #475569;
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
+.gpu-chip.busy {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.reserved-env-strip {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.reserved-env-strip > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reserved-env-strip span {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  color: #1e3a8a;
+  font-family: Consolas, 'Liberation Mono', monospace;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 5px 8px;
+}
+
+.telemetry-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.telemetry-card > div:first-child,
+.metric-line {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.telemetry-card span,
+.telemetry-card small,
+.metric-line span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.metric-line strong {
+  color: var(--slate);
+  font-size: 0.86rem;
+}
+
+.meter {
+  background: #e2e8f0;
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.meter span {
+  background: linear-gradient(90deg, #22c55e, #f59e0b, #ef4444);
+  display: block;
+  height: 100%;
+}
+
+.nested-panel {
+  box-shadow: none;
+}
+
+.compact-table {
+  min-width: 720px;
 }
 
 .pressure {
@@ -493,6 +691,258 @@ button:disabled {
   align-items: end;
   display: flex;
   gap: 8px;
+}
+
+.command-preview-panel {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.workflow-shell {
+  background: linear-gradient(180deg, #f8fafc, #eef6ff);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.mode-switch {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.mode-switch button {
+  background: transparent;
+  border: 0;
+  color: var(--slate);
+  font-weight: 800;
+  padding: 12px;
+}
+
+.mode-switch button.active {
+  background: var(--blue);
+  color: white;
+}
+
+.task-support-panel {
+  align-items: center;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.task-support-panel h3 {
+  margin: 2px 0 4px;
+}
+
+.task-support-panel p {
+  color: var(--muted);
+  margin: 0;
+  max-width: 760px;
+}
+
+.support-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.support-chips span {
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  color: #166534;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 5px 8px;
+  white-space: nowrap;
+}
+
+.job-compose-grid {
+  background: white;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+}
+
+.job-compose-grid label,
+.job-compose-grid input,
+.job-compose-grid select,
+.job-compose-grid textarea {
+  min-width: 0;
+  width: 100%;
+}
+
+.job-compose-grid .form-submit-button {
+  grid-column: 1 / -1;
+  min-height: 44px;
+  width: 100%;
+}
+
+.advanced-fields {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.advanced-fields summary {
+  color: var(--slate);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.advanced-fields label {
+  margin-top: 10px;
+}
+
+.job-workbench {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  min-width: 0;
+}
+
+.plan-summary-card {
+  background: #0f172a;
+  border-radius: 14px;
+  color: white;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  position: relative;
+  z-index: 0;
+}
+
+.plan-summary-card .eyebrow {
+  color: #7dd3fc;
+}
+
+.plan-summary-card h3 {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-summary-card dl {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.plan-summary-card dl div {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.plan-summary-card dt {
+  color: #94a3b8;
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.plan-summary-card dd {
+  font-size: 1.1rem;
+  font-weight: 900;
+  margin: 4px 0 0;
+}
+
+.plan-role-list {
+  display: grid;
+  gap: 8px;
+}
+
+.plan-role-list span {
+  background: rgba(37, 99, 235, 0.28);
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  border-radius: 999px;
+  color: #e0f2fe;
+  font-size: 0.8rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+  padding: 7px 10px;
+}
+
+.review-command-line {
+  background: #0f172a;
+  border-radius: 12px;
+  color: #e2e8f0;
+  font-family: Consolas, 'Liberation Mono', monospace;
+  font-size: 0.86rem;
+  overflow-x: auto;
+  padding: 12px;
+  white-space: nowrap;
+}
+
+.json-details {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.json-details summary {
+  color: var(--slate);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.json-details .code-block {
+  margin-top: 10px;
+}
+
+.compact-header {
+  margin-bottom: 0;
+}
+
+.compact-header h3 {
+  margin: 0 0 4px;
+}
+
+.preview-grid,
+.node-command-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.preview-grid label,
+.node-command-grid label {
+  color: var(--slate);
+  display: grid;
+  font-size: 0.82rem;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.preview-grid textarea,
+.node-command-grid textarea {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-family: Consolas, 'Liberation Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  padding: 10px 11px;
+  resize: vertical;
 }
 
 .queue-form {
@@ -747,6 +1197,9 @@ button:disabled {
   .metric-grid,
   .filter-bar,
   .inline-form-grid,
+  .job-workbench,
+  .preview-grid,
+  .node-command-grid,
   .detail-grid,
   .form-grid,
   .hero-panel {
