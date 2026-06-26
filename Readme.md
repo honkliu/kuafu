@@ -29,6 +29,23 @@ The production track starts now:
 
 See [docs/production-roadmap.md](docs/production-roadmap.md) and [docs/a00-a01-kubernetes-bootstrap.md](docs/a00-a01-kubernetes-bootstrap.md).
 The concrete engineering queue is tracked in [docs/production-backlog.md](docs/production-backlog.md).
+The world-class feature model, OpenPAI gap analysis, and 40-step delivery program are tracked in:
+
+- [docs/world-class-capability-model.md](docs/world-class-capability-model.md)
+- [docs/openpai-gap-analysis.md](docs/openpai-gap-analysis.md)
+- [docs/forty-step-production-program.md](docs/forty-step-production-program.md)
+- [docs/configuration.md](docs/configuration.md)
+- [docs/kubernetes-client-abstraction.md](docs/kubernetes-client-abstraction.md)
+- [docs/scheduler-adapter-contract.md](docs/scheduler-adapter-contract.md)
+- [docs/repository-boundary.md](docs/repository-boundary.md)
+- [docs/sync-controller.md](docs/sync-controller.md)
+- [docs/errors-and-retries.md](docs/errors-and-retries.md)
+- [docs/queue-quota-policy.md](docs/queue-quota-policy.md)
+- [docs/multi-tenancy.md](docs/multi-tenancy.md)
+- [docs/auth-rbac.md](docs/auth-rbac.md)
+- [docs/api-contract.md](docs/api-contract.md)
+- [docs/volcano-adapter.md](docs/volcano-adapter.md)
+- [docs/adr/0001-scheduler-strategy.md](docs/adr/0001-scheduler-strategy.md)
 
 ## Quick Start
 
@@ -43,13 +60,24 @@ The concrete engineering queue is tracked in [docs/production-backlog.md](docs/p
 The simplest way to explore Kuafu is through the web dashboard:
 
 ```powershell
-# Start the server (from repo root)
+# Start the lab-mode server (from repo root)
 cd q:\gitroot\kuafu
-go run cmd/kuafu-server/main.go --addr :8080 --seed
+go run cmd/kuafu-server/main.go --config configs/kuafu.lab.json
 
 # Open in browser
 start http://localhost:8080
 ```
+
+On A00, use the externally reachable port `30000`:
+
+```powershell
+go run cmd/kuafu-server/main.go --config configs/kuafu.a00.lab.json
+
+# External URL
+# http://<A00-public-ip>:30000
+```
+
+Project-scoped lab job submissions use the development `X-Kuafu-User` header. Seeded lab users are `lab-admin`, `lab-user`, and `lab-viewer`.
 
 The dashboard provides:
 
@@ -155,11 +183,30 @@ kuafu --fixture nodes list
 
 See [docs/sprint0-dev-guide.md](docs/sprint0-dev-guide.md) for detailed build and test instructions.
 
+### Runtime Modes
+
+- `production` is the default binary mode and intentionally fails until Kubernetes, GPU device plugins, scheduler adapter, and persistent repository are configured.
+- `lab` runs the current in-memory repository and simulated scheduler for local development and UI/API iteration.
+
+```powershell
+# Fails fast until production Kubernetes integration exists
+go run cmd/kuafu-server/main.go
+
+# Validates production config, then exits because runtime wiring is not complete yet
+go run cmd/kuafu-server/main.go --config configs/kuafu.production.example.json
+
+# Starts the lab prototype explicitly
+go run cmd/kuafu-server/main.go --config configs/kuafu.lab.json
+```
+
 ### Running Tests
 
 ```bash
 # Using Docker
 docker run --rm -v ${PWD}:/workspace kuafu:sprint0 go test -v ./...
+
+# With local Go
+make validate
 ```
 
 ## Vision

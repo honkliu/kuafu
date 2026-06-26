@@ -28,5 +28,5 @@ COPY --from=builder /workspace/web ./web
 # Expose API port
 EXPOSE 8080
 
-# Default command runs the server
-CMD ["/app/kuafu-server"]
+# Default command runs the explicit lab prototype.
+CMD ["/app/kuafu-server", "--mode", "lab"]

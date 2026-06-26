@@ -9,23 +9,27 @@ import (
 	"strings"
 	"time"
 
+	"github.com/microsoft/kuafu/internal/auth"
 	"github.com/microsoft/kuafu/internal/domain"
+	"github.com/microsoft/kuafu/internal/policy"
 	"github.com/microsoft/kuafu/internal/repository"
 	"github.com/microsoft/kuafu/internal/scheduler"
 )
 
 // Server provides the HTTP API server
 type Server struct {
-	repo      *repository.MemoryRepository
+	repo      repository.Repository
 	scheduler *scheduler.Scheduler
+	auth      auth.Authenticator
 	server    *http.Server
 }
 
 // NewServer creates a new API server
-func NewServer(repo *repository.MemoryRepository, sched *scheduler.Scheduler, addr string) *Server {
+func NewServer(repo repository.Repository, sched *scheduler.Scheduler, addr string) *Server {
 	s := &Server{
 		repo:      repo,
 		scheduler: sched,
+		auth:      auth.AnonymousAuthenticator{},
 	}
 
 	mux := http.NewServeMux()
@@ -57,6 +61,10 @@ func NewServer(repo *repository.MemoryRepository, sched *scheduler.Scheduler, ad
 	return s
 }
 
+func (s *Server) SetAuthenticator(authenticator auth.Authenticator) {
+	s.auth = authenticator
+}
+
 // Start starts the HTTP server
 func (s *Server) Start() error {
 	log.Printf("Starting API server on %s", s.server.Addr)
@@ -69,13 +77,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ready": true})
+	writeJSON(w, http.StatusOK, map[string]bool{"ready": true})
 }
 
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
@@ -90,8 +96,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"nodes": nodes,
 		"count": len(nodes),
 	})
@@ -116,8 +121,7 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(node)
+	writeJSON(w, http.StatusOK, node)
 }
 
 func (s *Server) handleGPUs(w http.ResponseWriter, r *http.Request) {
@@ -133,8 +137,7 @@ func (s *Server) handleGPUs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"gpus":  gpus,
 		"count": len(gpus),
 	})
@@ -159,15 +162,20 @@ func (s *Server) handleGPU(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, gpu)
+}
+
+func writeJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(gpu)
+	w.WriteHeader(code)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("Failed to write JSON response: %v", err)
+	}
 }
 
 // Helper to write JSON error response
 func writeError(w http.ResponseWriter, message string, code int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	writeJSON(w, code, map[string]string{"error": message})
 }
 
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
@@ -188,8 +196,7 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"jobs":  jobs,
 		"count": len(jobs),
 	})
@@ -211,6 +218,17 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 	if req.GPUCount <= 0 {
 		req.GPUCount = 1
 	}
+	if req.Project != "" {
+		user, err := s.auth.Authenticate(r)
+		if err != nil {
+			writeError(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+		if err := policy.CanSubmit(user, req.Project); err != nil {
+			writeError(w, err.Error(), http.StatusForbidden)
+			return
+		}
+	}
 
 	// Check if queue exists
 	queue, err := s.repo.GetQueue(req.Queue)
@@ -226,6 +244,7 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 	job := &domain.Job{
 		ID:          jobID,
 		Name:        req.Name,
+		Project:     req.Project,
 		Queue:       req.Queue,
 		Command:     req.Command,
 		Image:       req.Image,
@@ -235,6 +254,16 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 		Logs:        []string{fmt.Sprintf("[%s] Job submitted to queue %s", time.Now().Format("15:04:05"), req.Queue)},
 	}
 
+	jobs, err := s.repo.ListJobs()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := policy.AdmitJob(queue, job, policy.UsageForQueue(queue.Name, jobs)); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	if err := s.repo.AddJob(job); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -242,11 +271,12 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 
 	// Update queue stats
 	queue.JobsQueued++
-	s.repo.AddQueue(queue)
+	if err := s.repo.AddQueue(queue); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(job)
+	writeJSON(w, http.StatusCreated, job)
 }
 
 func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
@@ -284,8 +314,7 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, jobID string) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	writeJSON(w, http.StatusOK, job)
 }
 
 func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request, jobID string) {
@@ -294,9 +323,12 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request, jobID string)
 		return
 	}
 
-	job, _ := s.repo.GetJob(jobID)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	job, err := s.repo.GetJob(jobID)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
 }
 
 func (s *Server) getJobLogs(w http.ResponseWriter, r *http.Request, jobID string) {
@@ -311,8 +343,7 @@ func (s *Server) getJobLogs(w http.ResponseWriter, r *http.Request, jobID string
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"jobId": job.ID,
 		"logs":  job.Logs,
 	})
@@ -330,8 +361,7 @@ func (s *Server) handleQueues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"queues": queues,
 		"count":  len(queues),
 	})
@@ -356,8 +386,7 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(queue)
+	writeJSON(w, http.StatusOK, queue)
 }
 
 func (s *Server) handleClusterSummary(w http.ResponseWriter, r *http.Request) {
@@ -366,19 +395,39 @@ func (s *Server) handleClusterSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodes, _ := s.repo.ListNodes()
-	gpus, _ := s.repo.ListGPUs("")
-	jobs, _ := s.repo.ListJobs()
-	queues, _ := s.repo.ListQueues()
+	nodes, err := s.repo.ListNodes()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	gpus, err := s.repo.ListGPUs("")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	jobs, err := s.repo.ListJobs()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	queues, err := s.repo.ListQueues()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// Calculate stats
 	totalGPUs := len(gpus)
 	allocatedGPUs := 0
 	availableGPUs := 0
 	for _, gpu := range gpus {
-		if gpu.Status == domain.GPUStatusAllocated {
+		switch gpu.Status {
+		case domain.GPUStatusAllocated:
 			allocatedGPUs++
-		} else if gpu.Status == domain.GPUStatusAvailable {
+		case domain.GPUStatusAvailable:
 			availableGPUs++
 		}
 	}
@@ -418,6 +467,5 @@ func (s *Server) handleClusterSummary(w http.ResponseWriter, r *http.Request) {
 		"queues": len(queues),
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(summary)
+	writeJSON(w, http.StatusOK, summary)
 }

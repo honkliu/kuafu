@@ -179,3 +179,44 @@ func SeedTestbedA00A01(addNode func(*domain.Node) error, addGPU func(*domain.GPU
 
 	return nil
 }
+
+// SeedLabTenants populates repository with default lab project and users.
+func SeedLabTenants(addProject func(*domain.Project) error, addUser func(*domain.User) error) error {
+	now := time.Now()
+	project := &domain.Project{
+		Name:         "lab",
+		DisplayName:  "Kuafu Lab",
+		DefaultQueue: "default",
+		CreatedAt:    now,
+	}
+	if err := addProject(project); err != nil {
+		return err
+	}
+
+	users := []*domain.User{
+		{
+			Alias:       "lab-admin",
+			DisplayName: "Lab Admin",
+			Memberships: []domain.ProjectMembership{{Project: "lab", Role: domain.ProjectRoleAdmin}},
+			CreatedAt:   now,
+		},
+		{
+			Alias:       "lab-user",
+			DisplayName: "Lab User",
+			Memberships: []domain.ProjectMembership{{Project: "lab", Role: domain.ProjectRoleSubmitter}},
+			CreatedAt:   now,
+		},
+		{
+			Alias:       "lab-viewer",
+			DisplayName: "Lab Viewer",
+			Memberships: []domain.ProjectMembership{{Project: "lab", Role: domain.ProjectRoleViewer}},
+			CreatedAt:   now,
+		},
+	}
+	for _, user := range users {
+		if err := addUser(user); err != nil {
+			return err
+		}
+	}
+	return nil
+}

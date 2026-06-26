@@ -1,7 +1,7 @@
 # Kuafu Testbed: A00 and A01
 
-Status: initial smoke test complete  
-Date: 2026-06-24
+Status: Kubernetes and GPU device-plugin bootstrap complete  
+Date: 2026-06-26
 
 ## Access
 
@@ -13,6 +13,16 @@ The first Kuafu testbed has two A100 machines reachable through the same public 
 | A01 | `ssh -i C:\Users\shuguanl\Downloads\superbench_a100.key -p 50001 hpcuser@52.171.138.19` | `hpcdev000001` | `10.0.0.5` | `172.16.2.234` |
 
 The SSH key stays outside the repo under `C:\Users\shuguanl\Downloads`. Do not copy the private key into this repository.
+
+## External Access
+
+A00 can expose HTTP externally on port `30000`. Early Kuafu lab or Kubernetes NodePort access should use:
+
+```text
+http://<A00-public-ip>:30000
+```
+
+This is an external ingress constraint only. Communication between A00 and A01 can use arbitrary ports on the private Ethernet and InfiniBand networks.
 
 ## Hardware And OS
 
@@ -42,8 +52,11 @@ Total current testbed capacity: 2 nodes, 16 A100-SXM4-80GB GPUs, 192 CPU cores, 
 | Python 3 | Pass | Pass | Python 3.10.12. |
 | Git | Pass | Pass | Git 2.34.1. |
 | Go | Missing | Missing | Required for Kuafu backend/CLI development. |
-| kubectl | Missing | Missing | Required before Kubernetes tests. |
-| kubelet | Missing | Missing | Required before these machines can be Kubernetes nodes. |
+| kubectl | Pass | Pass | Kubernetes client v1.36.1. |
+| kubeadm | Pass | Pass | kubeadm v1.36.1. |
+| kubelet | Pass | Pass | kubelet v1.36.1. |
+| Kubernetes node | Ready control-plane | Ready worker | A00 initialized with kubeadm; A01 joined as worker. |
+| Kubernetes GPU resource | Pass | Pass | NVIDIA device plugin exposes `nvidia.com/gpu: 8` per node. |
 
 ## Network And Topology
 
@@ -60,7 +73,21 @@ Both nodes have one Ethernet interface and eight InfiniBand interfaces.
 | Intra-node GPU topology | All 8 GPUs are connected by `NV12` links on both nodes. |
 | GPU to NIC locality | GPUs are paired with nearby NIC groups by NUMA locality. |
 
-This is enough for early two-node distributed GPU experiments after Kubernetes or a lightweight launcher is installed.
+This is enough for early two-node distributed GPU experiments and scheduler adapter spikes.
+
+## Kubernetes Bootstrap Result
+
+| Item | Result |
+| --- | --- |
+| Control plane | A00 `hpcdev000000` |
+| Worker | A01 `hpcdev000001` |
+| Kubernetes version | v1.36.1 from Microsoft Ubuntu package feed |
+| CNI | Flannel, plus `containernetworking-plugins` for `/opt/cni/bin/loopback` |
+| GPU management | NVIDIA device plugin v0.17.1 fallback |
+| GPU resource | `nvidia.com/gpu: 8` allocatable on each node |
+| GPU smoke | Kubernetes pod requesting `nvidia.com/gpu: 1` ran `nvidia-smi -L` successfully |
+| Existing Docker containers | Stopped before bootstrap and restarted after validation |
+| A01 open-webui | Restored and healthy on host port `30000` |
 
 ## Commands Already Run
 
@@ -87,16 +114,14 @@ ssh -i 'C:\Users\shuguanl\Downloads\superbench_a100.key' -p 50001 hpcuser@52.171
 
 ## Immediate Test Plan
 
-1. Install missing developer and Kubernetes tools: Go, `kubectl`, `kubelet`, `kubeadm` or the selected lightweight Kubernetes distribution.
-2. Decide whether the first two-node cluster should use kubeadm, kind-on-Docker, k3s, or an OpenPAI-compatible Kubernetes setup.
-3. Install or validate NVIDIA Kubernetes device plugin / GPU Operator on the cluster.
-4. Run a two-node Kubernetes GPU scheduling smoke test with one pod per node.
-5. Run a multi-node container communication test over IB before implementing distributed job launcher integration.
-6. Use this testbed for the first Kuafu proof of concept: resource inventory discovery, scheduler adapter spike, and CLI/API smoke tests.
+1. Run FrameworkController/HiveD scheduler adapter spike.
+2. Keep Volcano fallback scaffold ready for live Kubernetes validation.
+3. Run a multi-node container communication test over IB before distributed training launcher integration.
+4. Use this testbed for resource inventory discovery, scheduler adapter spike, and CLI/API smoke tests.
 
 ## Constraints
 
-- Kubernetes is not installed yet on either machine.
 - Go is not installed yet, so Kuafu Go backend/CLI binaries cannot be built on these machines without setup.
 - This testbed is NVIDIA A100-only. It does not validate MI300/ROCm behavior.
-- The current report is based on read-only inspection plus a Docker GPU smoke test. No system packages or Kubernetes components were installed.
+- NVIDIA GPU Operator is not installed yet; the current validated GPU path uses the standalone NVIDIA device plugin fallback.
+- A01 `open-webui` owns host port `30000`; do not blindly apply a cluster-wide Kuafu NodePort `30000` service until port ownership is resolved.

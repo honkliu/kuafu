@@ -85,10 +85,10 @@ go test -cover ./...
 
 ```powershell
 # Local
-./bin/kuafu-server.exe
+./bin/kuafu-server.exe --mode lab
 
 # Docker
-docker run --rm -p 8080:8080 kuafu:sprint0 /app/kuafu-server
+docker run --rm -p 8080:8080 kuafu:sprint0 /app/kuafu-server --mode lab
 ```
 
 Server starts on `http://localhost:8080` by default.
@@ -96,8 +96,8 @@ Server starts on `http://localhost:8080` by default.
 ### Server Options
 
 ```powershell
-./bin/kuafu-server.exe -addr :9000      # Custom port
-./bin/kuafu-server.exe -seed=false      # Don't seed testbed data
+./bin/kuafu-server.exe --mode lab -addr :9000      # Custom port
+./bin/kuafu-server.exe --mode lab -seed=false      # Don't seed testbed data
 ```
 
 ## API Endpoints
@@ -179,7 +179,7 @@ docker run --rm -v ${PWD}:/workspace kuafu:sprint0 go build -o /workspace/bin/ku
 docker run --rm -v ${PWD}:/workspace kuafu:sprint0 go build -o /workspace/bin/kuafu ./cmd/kuafu
 
 # 3. Start server
-docker run --rm -d -p 8080:8080 --name kuafu-server kuafu:sprint0 /app/kuafu-server
+docker run --rm -d -p 8080:8080 --name kuafu-server kuafu:sprint0 /app/kuafu-server --mode lab
 
 # 4. Test API
 curl http://localhost:8080/health

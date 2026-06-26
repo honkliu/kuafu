@@ -22,7 +22,9 @@ func TestScheduler_JobLifecycle(t *testing.T) {
 			Status:    domain.GPUStatusAvailable,
 			CreatedAt: time.Now(),
 		}
-		repo.AddGPU(gpu)
+		if err := repo.AddGPU(gpu); err != nil {
+			t.Fatalf("AddGPU failed: %v", err)
+		}
 	}
 
 	// Add queue
@@ -31,7 +33,9 @@ func TestScheduler_JobLifecycle(t *testing.T) {
 		MaxGPUs:  8,
 		Priority: 100,
 	}
-	repo.AddQueue(queue)
+	if err := repo.AddQueue(queue); err != nil {
+		t.Fatalf("AddQueue failed: %v", err)
+	}
 
 	// Create and start scheduler
 	sched := NewScheduler(repo)
@@ -49,7 +53,9 @@ func TestScheduler_JobLifecycle(t *testing.T) {
 		Status:      domain.JobStatusQueued,
 		SubmittedAt: time.Now(),
 	}
-	repo.AddJob(job)
+	if err := repo.AddJob(job); err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
 
 	// Wait for job to start
 	time.Sleep(1 * time.Second)
@@ -97,7 +103,9 @@ func TestScheduler_CancelJob(t *testing.T) {
 			Status:    domain.GPUStatusAvailable,
 			CreatedAt: time.Now(),
 		}
-		repo.AddGPU(gpu)
+		if err := repo.AddGPU(gpu); err != nil {
+			t.Fatalf("AddGPU failed: %v", err)
+		}
 	}
 
 	// Add queue
@@ -106,7 +114,9 @@ func TestScheduler_CancelJob(t *testing.T) {
 		MaxGPUs:  4,
 		Priority: 100,
 	}
-	repo.AddQueue(queue)
+	if err := repo.AddQueue(queue); err != nil {
+		t.Fatalf("AddQueue failed: %v", err)
+	}
 
 	// Create scheduler
 	sched := NewScheduler(repo)
@@ -121,7 +131,9 @@ func TestScheduler_CancelJob(t *testing.T) {
 		Status:      domain.JobStatusQueued,
 		SubmittedAt: time.Now(),
 	}
-	repo.AddJob(job)
+	if err := repo.AddJob(job); err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
 
 	// Cancel the job
 	if err := sched.CancelJob("test-job-cancel"); err != nil {
@@ -150,7 +162,9 @@ func TestScheduler_FIFO(t *testing.T) {
 			Status:    domain.GPUStatusAvailable,
 			CreatedAt: time.Now(),
 		}
-		repo.AddGPU(gpu)
+		if err := repo.AddGPU(gpu); err != nil {
+			t.Fatalf("AddGPU failed: %v", err)
+		}
 	}
 
 	// Add queue
@@ -159,7 +173,9 @@ func TestScheduler_FIFO(t *testing.T) {
 		MaxGPUs:  4,
 		Priority: 100,
 	}
-	repo.AddQueue(queue)
+	if err := repo.AddQueue(queue); err != nil {
+		t.Fatalf("AddQueue failed: %v", err)
+	}
 
 	// Create and start scheduler
 	sched := NewScheduler(repo)
@@ -177,7 +193,9 @@ func TestScheduler_FIFO(t *testing.T) {
 		Status:      domain.JobStatusQueued,
 		SubmittedAt: time.Now(),
 	}
-	repo.AddJob(job1)
+	if err := repo.AddJob(job1); err != nil {
+		t.Fatalf("AddJob job1 failed: %v", err)
+	}
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -190,7 +208,9 @@ func TestScheduler_FIFO(t *testing.T) {
 		Status:      domain.JobStatusQueued,
 		SubmittedAt: time.Now(),
 	}
-	repo.AddJob(job2)
+	if err := repo.AddJob(job2); err != nil {
+		t.Fatalf("AddJob job2 failed: %v", err)
+	}
 
 	// Wait for first job to start
 	time.Sleep(1 * time.Second)

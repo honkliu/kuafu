@@ -1,0 +1,26 @@
+{
+  "server": {
+    "addr": ":8080"
+  },
+  "runtime": {
+    "mode": "production"
+  },
+  "production": {
+    "kubernetes": {
+      "kubeConfigPath": "/etc/kuafu/kubeconfig",
+      "apiServerURL": "https://kubernetes.default.svc"
+    },
+    "mongoDB": {
+      "uri": "mongodb://kuafu-mongodb.kuafu-system.svc.cluster.local:27017/kuafu"
+    },
+    "scheduler": {
+      "backend": "frameworkcontroller"
+    },
+    "auth": {
+      "provider": "oidc"
+    },
+    "validation": {
+      "checkConnectivity": false
+    }
+  }
+}

@@ -249,7 +249,9 @@ func TestMemoryRepository_UpdateGPUAllocation(t *testing.T) {
 		Status:    domain.GPUStatusAvailable,
 		CreatedAt: time.Now(),
 	}
-	repo.AddGPU(gpu)
+	if err := repo.AddGPU(gpu); err != nil {
+		t.Fatalf("AddGPU failed: %v", err)
+	}
 
 	// Test allocating GPU to a job
 	if err := repo.UpdateGPUAllocation("gpu-0", "job-1"); err != nil {

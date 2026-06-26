@@ -48,7 +48,7 @@ Write-Host ""
 
 # Start server in background
 Write-Host "5. Starting API server..." -ForegroundColor Yellow
-docker run --rm -d -p 8080:8080 --name kuafu-server kuafu:sprint0 /app/kuafu-server
+docker run --rm -d -p 8080:8080 --name kuafu-server kuafu:sprint0 /app/kuafu-server --mode lab
 Start-Sleep -Seconds 2
 Write-Host "✓ Server started" -ForegroundColor Green
 Write-Host ""

@@ -9,20 +9,24 @@ import (
 
 // MemoryRepository provides in-memory storage for nodes, GPUs, jobs, and queues
 type MemoryRepository struct {
-	nodes  map[string]*domain.Node
-	gpus   map[string]*domain.GPU
-	jobs   map[string]*domain.Job
-	queues map[string]*domain.Queue
-	mu     sync.RWMutex
+	nodes    map[string]*domain.Node
+	gpus     map[string]*domain.GPU
+	jobs     map[string]*domain.Job
+	queues   map[string]*domain.Queue
+	users    map[string]*domain.User
+	projects map[string]*domain.Project
+	mu       sync.RWMutex
 }
 
 // NewMemoryRepository creates a new in-memory repository
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		nodes:  make(map[string]*domain.Node),
-		gpus:   make(map[string]*domain.GPU),
-		jobs:   make(map[string]*domain.Job),
-		queues: make(map[string]*domain.Queue),
+		nodes:    make(map[string]*domain.Node),
+		gpus:     make(map[string]*domain.GPU),
+		jobs:     make(map[string]*domain.Job),
+		queues:   make(map[string]*domain.Queue),
+		users:    make(map[string]*domain.User),
+		projects: make(map[string]*domain.Project),
 	}
 }
 
@@ -197,20 +201,127 @@ func (r *MemoryRepository) ListQueues() ([]*domain.Queue, error) {
 	return queues, nil
 }
 
-// UpdateGPUAllocation updates GPU allocation status
-func (r *MemoryRepository) UpdateGPUAllocation(gpuID, jobID string) error {
+// AddUser adds or updates a user.
+func (r *MemoryRepository) AddUser(user *domain.User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	gpu, exists := r.gpus[gpuID]
+	if user.Alias == "" {
+		return fmt.Errorf("user alias cannot be empty")
+	}
+	r.users[user.Alias] = user
+	return nil
+}
+
+// GetUser retrieves a user by alias.
+func (r *MemoryRepository) GetUser(alias string) (*domain.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	user, exists := r.users[alias]
 	if !exists {
-		return fmt.Errorf("gpu %s not found", gpuID)
+		return nil, fmt.Errorf("user %s not found", alias)
+	}
+	return user, nil
+}
+
+// ListUsers returns all users.
+func (r *MemoryRepository) ListUsers() ([]*domain.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	users := make([]*domain.User, 0, len(r.users))
+	for _, user := range r.users {
+		users = append(users, user)
+	}
+	return users, nil
+}
+
+// AddProject adds or updates a project.
+func (r *MemoryRepository) AddProject(project *domain.Project) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if project.Name == "" {
+		return fmt.Errorf("project name cannot be empty")
+	}
+	r.projects[project.Name] = project
+	return nil
+}
+
+// GetProject retrieves a project by name.
+func (r *MemoryRepository) GetProject(name string) (*domain.Project, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	project, exists := r.projects[name]
+	if !exists {
+		return nil, fmt.Errorf("project %s not found", name)
+	}
+	return project, nil
+}
+
+// ListProjects returns all projects.
+func (r *MemoryRepository) ListProjects() ([]*domain.Project, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	projects := make([]*domain.Project, 0, len(r.projects))
+	for _, project := range r.projects {
+		projects = append(projects, project)
+	}
+	return projects, nil
+}
+
+// UpdateGPUAllocation updates GPU allocation status
+func (r *MemoryRepository) UpdateGPUAllocation(gpuID, jobID string) error {
+	if jobID != "" {
+		return r.AllocateGPUs([]string{gpuID}, jobID)
+	}
+	return r.ReleaseGPUs([]string{gpuID})
+}
+
+// AllocateGPUs atomically allocates a group of GPUs to a job.
+func (r *MemoryRepository) AllocateGPUs(gpuIDs []string, jobID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if jobID == "" {
+		return fmt.Errorf("job id cannot be empty")
 	}
 
-	if jobID != "" {
+	for _, gpuID := range gpuIDs {
+		gpu, exists := r.gpus[gpuID]
+		if !exists {
+			return fmt.Errorf("gpu %s not found", gpuID)
+		}
+		if gpu.Status != domain.GPUStatusAvailable {
+			return fmt.Errorf("gpu %s is not available", gpuID)
+		}
+	}
+
+	for _, gpuID := range gpuIDs {
+		gpu := r.gpus[gpuID]
 		gpu.Status = domain.GPUStatusAllocated
 		gpu.AllocatedTo = jobID
-	} else {
+	}
+
+	return nil
+}
+
+// ReleaseGPUs atomically releases a group of GPUs.
+func (r *MemoryRepository) ReleaseGPUs(gpuIDs []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, gpuID := range gpuIDs {
+		if _, exists := r.gpus[gpuID]; !exists {
+			return fmt.Errorf("gpu %s not found", gpuID)
+		}
+	}
+
+	for _, gpuID := range gpuIDs {
+		gpu := r.gpus[gpuID]
 		gpu.Status = domain.GPUStatusAvailable
 		gpu.AllocatedTo = ""
 	}

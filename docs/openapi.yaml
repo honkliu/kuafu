@@ -1,0 +1,456 @@
+openapi: 3.1.0
+info:
+  title: Kuafu API
+  version: 0.1.0
+  description: >
+    Kuafu lab/prototype API contract. Production mode still fails fast until
+    Kubernetes runtime, MongoDB deployment, scheduler adapters, and OIDC/JWT
+    authentication are wired.
+servers:
+  - url: http://localhost:8080
+    description: Local lab mode
+  - url: http://{a00PublicIp}:30000
+    description: A00 external lab/NodePort entry
+    variables:
+      a00PublicIp:
+        default: 52.171.138.19
+security: []
+tags:
+  - name: health
+  - name: inventory
+  - name: jobs
+  - name: queues
+  - name: cluster
+paths:
+  /health:
+    get:
+      tags: [health]
+      operationId: getHealth
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+  /ready:
+    get:
+      tags: [health]
+      operationId: getReady
+      responses:
+        '200':
+          description: Readiness status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ready:
+                    type: boolean
+  /api/v1/cluster/summary:
+    get:
+      tags: [cluster]
+      operationId: getClusterSummary
+      responses:
+        '200':
+          description: Cluster summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterSummary'
+  /api/v1/nodes:
+    get:
+      tags: [inventory]
+      operationId: listNodes
+      responses:
+        '200':
+          description: Node list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nodes, count]
+                properties:
+                  nodes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Node'
+                  count:
+                    type: integer
+  /api/v1/nodes/{name}:
+    get:
+      tags: [inventory]
+      operationId: getNode
+      parameters:
+        - $ref: '#/components/parameters/NodeName'
+      responses:
+        '200':
+          description: Node detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Node'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/gpus:
+    get:
+      tags: [inventory]
+      operationId: listGPUs
+      parameters:
+        - name: node
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: GPU list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [gpus, count]
+                properties:
+                  gpus:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GPU'
+                  count:
+                    type: integer
+  /api/v1/gpus/{id}:
+    get:
+      tags: [inventory]
+      operationId: getGPU
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: GPU detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GPU'
+        '404':
+          $ref: '#/components/responses/Error'
+  /api/v1/jobs:
+    get:
+      tags: [jobs]
+      operationId: listJobs
+      responses:
+        '200':
+          description: Job list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobs, count]
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Job'
+                  count:
+                    type: integer
+    post:
+      tags: [jobs]
+      operationId: submitJob
+      description: >
+        Submit a job. If `project` is set, dev header `X-Kuafu-User` is used
+        by the current scaffold to authorize project submitter/admin role.
+        Production must replace this with OIDC/JWT auth.
+      parameters:
+        - $ref: '#/components/parameters/KuafuUser'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobSubmitRequest'
+      responses:
+        '201':
+          description: Job submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /api/v1/jobs/{id}:
+    get:
+      tags: [jobs]
+      operationId: getJob
+      parameters:
+        - $ref: '#/components/parameters/JobID'
+      responses:
+        '200':
+          description: Job detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [jobs]
+      operationId: cancelJob
+      parameters:
+        - $ref: '#/components/parameters/JobID'
+      responses:
+        '200':
+          description: Canceled job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          $ref: '#/components/responses/Error'
+  /api/v1/jobs/{id}/logs:
+    get:
+      tags: [jobs]
+      operationId: getJobLogs
+      parameters:
+        - $ref: '#/components/parameters/JobID'
+      responses:
+        '200':
+          description: Job logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  logs:
+                    type: array
+                    items:
+                      type: string
+  /api/v1/queues:
+    get:
+      tags: [queues]
+      operationId: listQueues
+      responses:
+        '200':
+          description: Queue list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queues, count]
+                properties:
+                  queues:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Queue'
+                  count:
+                    type: integer
+  /api/v1/queues/{name}:
+    get:
+      tags: [queues]
+      operationId: getQueue
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Queue detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Queue'
+        '404':
+          $ref: '#/components/responses/Error'
+components:
+  parameters:
+    NodeName:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+    JobID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    KuafuUser:
+      name: X-Kuafu-User
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Development-only identity scaffold. Lab mode seeds lab-admin, lab-user, and lab-viewer. Production must use OIDC/JWT.
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+    Node:
+      type: object
+      properties:
+        name:
+          type: string
+        hostname:
+          type: string
+        privateIp:
+          type: string
+        infinibandIps:
+          type: array
+          items:
+            type: string
+        os:
+          type: string
+        kernel:
+          type: string
+        cpuCount:
+          type: integer
+        memoryGb:
+          type: integer
+        diskGb:
+          type: integer
+        gpuCount:
+          type: integer
+        status:
+          type: string
+          enum: [Ready, NotReady, Unknown, Maintenance]
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        lastHeartbeat:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    GPU:
+      type: object
+      properties:
+        id:
+          type: string
+        nodeName:
+          type: string
+        index:
+          type: integer
+        model:
+          type: string
+        memoryMb:
+          type: integer
+        uuid:
+          type: string
+        driver:
+          type: string
+        status:
+          type: string
+          enum: [Available, Allocated, Unavailable, Unknown]
+        allocatedTo:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    JobSubmitRequest:
+      type: object
+      required: [name, queue, command]
+      properties:
+        name:
+          type: string
+        project:
+          type: string
+        queue:
+          type: string
+        command:
+          type: string
+        image:
+          type: string
+        gpuCount:
+          type: integer
+          minimum: 1
+    Job:
+      allOf:
+        - $ref: '#/components/schemas/JobSubmitRequest'
+        - type: object
+          properties:
+            id:
+              type: string
+            status:
+              type: string
+              enum: [Queued, Running, Completed, Failed, Canceled]
+            runtimeId:
+              type: string
+            submittedAt:
+              type: string
+              format: date-time
+            startedAt:
+              type: string
+              format: date-time
+            completedAt:
+              type: string
+              format: date-time
+            allocatedGpus:
+              type: array
+              items:
+                type: string
+            logs:
+              type: array
+              items:
+                type: string
+            exitCode:
+              type: integer
+            errorMsg:
+              type: string
+    Queue:
+      type: object
+      properties:
+        name:
+          type: string
+        project:
+          type: string
+        maxGpus:
+          type: integer
+        softGpus:
+          type: integer
+        maxGpusPerJob:
+          type: integer
+        maxQueuedJobs:
+          type: integer
+        maxRunningJobs:
+          type: integer
+        priority:
+          type: integer
+        allowBurst:
+          type: boolean
+        jobsQueued:
+          type: integer
+        jobsRunning:
+          type: integer
+    ClusterSummary:
+      type: object
+      properties:
+        cluster:
+          type: object
+        jobs:
+          type: object
+        queues:
+          type: integer

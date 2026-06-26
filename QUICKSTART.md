@@ -23,8 +23,8 @@ docker build -t kuafu:sprint0 .
 # Run (with testbed data)
 docker run --rm -p 8080:8080 kuafu:sprint0
 
-# Run on different port
-docker run --rm -p 9000:8080 -e PORT=8080 kuafu:sprint0 /app/kuafu-server -addr :8080
+# Run on different port in explicit lab mode
+docker run --rm -p 9000:8080 -e PORT=8080 kuafu:sprint0 /app/kuafu-server --mode lab -addr :8080
 ```
 
 ### Binaries (After Docker Build)
@@ -32,9 +32,9 @@ docker run --rm -p 9000:8080 -e PORT=8080 kuafu:sprint0 /app/kuafu-server -addr 
 # Build binaries
 docker run --rm -v ${PWD}:/workspace kuafu:sprint0 go build -o /workspace/bin/kuafu-server ./cmd/kuafu-server
 
-# Run
-./bin/kuafu-server.exe
-./bin/kuafu-server.exe -addr :9000  # Different port
+# Run lab prototype
+./bin/kuafu-server.exe --mode lab
+./bin/kuafu-server.exe --mode lab -addr :9000  # Different port
 ```
 
 ## API Quick Tests
@@ -168,10 +168,10 @@ docker run --rm -v ${PWD}:/workspace kuafu:sprint0 go test -cover ./...
 # Build image
 docker build -t kuafu:sprint0 .
 
-# Run server (foreground)
+# Run lab server (foreground)
 docker run --rm -p 8080:8080 kuafu:sprint0
 
-# Run server (background)
+# Run lab server (background)
 docker run -d -p 8080:8080 --name kuafu-server kuafu:sprint0
 
 # Stop background server
@@ -189,9 +189,9 @@ docker run --rm -it kuafu:sprint0 sh
 
 ## Next Sprint Preview
 
-Sprint 1 will add:
-- Job domain models (Job, JobSpec, JobStatus)
-- Job repository and lifecycle operations
-- Queue domain model
-- CLI: `kuafu jobs submit`, `kuafu jobs list`, `kuafu jobs describe`
-- API: `/api/v1/jobs`, `/api/v1/queues`
+Production work will add:
+- Kubernetes bootstrap on A00/A01
+- NVIDIA GPU Operator or device plugin validation
+- Scheduler adapter spike with FrameworkController/HiveD and Volcano fallback
+- MongoDB-backed business state
+- Kubernetes-backed runtime state

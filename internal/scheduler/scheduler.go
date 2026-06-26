@@ -14,14 +14,14 @@ import (
 
 // Scheduler manages job scheduling and execution simulation
 type Scheduler struct {
-	repo     *repository.MemoryRepository
+	repo     repository.Repository
 	mu       sync.Mutex
 	stopChan chan struct{}
 	wg       sync.WaitGroup
 }
 
 // NewScheduler creates a new scheduler
-func NewScheduler(repo *repository.MemoryRepository) *Scheduler {
+func NewScheduler(repo repository.Repository) *Scheduler {
 	return &Scheduler{
 		repo:     repo,
 		stopChan: make(chan struct{}),
@@ -109,25 +109,38 @@ func (s *Scheduler) tryScheduleJob(job *domain.Job) {
 	job.AllocatedGPUs = make([]string, len(allocatedGPUs))
 	for i, gpu := range allocatedGPUs {
 		job.AllocatedGPUs[i] = gpu.ID
-		s.repo.UpdateGPUAllocation(gpu.ID, job.ID)
+	}
+	if err := s.repo.AllocateGPUs(job.AllocatedGPUs, job.ID); err != nil {
+		log.Printf("Failed to allocate GPUs to job %s: %v", job.ID, err)
+		return
 	}
 
 	// Update job status to running
 	job.Status = domain.JobStatusRunning
 	job.StartedAt = time.Now()
 	job.Logs = append(job.Logs, fmt.Sprintf("[%s] Job started with %d GPUs", time.Now().Format("15:04:05"), job.GPUCount))
-	s.repo.AddJob(job)
+	if err := s.repo.AddJob(job); err != nil {
+		log.Printf("Failed to update job %s after scheduling: %v", job.ID, err)
+		s.releaseAllocatedGPUs(job.AllocatedGPUs)
+		return
+	}
 
 	// Update queue stats
 	queue, err := s.repo.GetQueue(job.Queue)
 	if err == nil {
 		queue.JobsQueued--
 		queue.JobsRunning++
-		s.repo.AddQueue(queue)
+		if err := s.repo.AddQueue(queue); err != nil {
+			log.Printf("Failed to update queue %s after scheduling job %s: %v", queue.Name, job.ID, err)
+		}
 	}
 
 	// Start job execution simulation in background
-	go s.executeJob(job)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.executeJob(job)
+	}()
 }
 
 func (s *Scheduler) executeJob(job *domain.Job) {
@@ -140,7 +153,9 @@ func (s *Scheduler) executeJob(job *domain.Job) {
 	// Add execution logs
 	job.Logs = append(job.Logs, fmt.Sprintf("[%s] Executing command: %s", time.Now().Format("15:04:05"), job.Command))
 	job.Logs = append(job.Logs, fmt.Sprintf("[%s] Using image: %s", time.Now().Format("15:04:05"), job.Image))
-	s.repo.AddJob(job)
+	if err := s.repo.AddJob(job); err != nil {
+		log.Printf("Failed to append execution logs for job %s: %v", job.ID, err)
+	}
 
 	time.Sleep(duration)
 
@@ -175,12 +190,12 @@ func (s *Scheduler) executeJob(job *domain.Job) {
 	currentJob.Status = status
 	currentJob.CompletedAt = time.Now()
 	currentJob.ExitCode = &exitCode
-	s.repo.AddJob(currentJob)
+	if err := s.repo.AddJob(currentJob); err != nil {
+		log.Printf("Failed to update completed job %s: %v", currentJob.ID, err)
+	}
 
 	// Release GPUs
-	for _, gpuID := range currentJob.AllocatedGPUs {
-		s.repo.UpdateGPUAllocation(gpuID, "")
-	}
+	s.releaseAllocatedGPUs(currentJob.AllocatedGPUs)
 
 	// Update queue stats
 	queue, err := s.repo.GetQueue(currentJob.Queue)
@@ -188,10 +203,28 @@ func (s *Scheduler) executeJob(job *domain.Job) {
 		if queue.JobsRunning > 0 {
 			queue.JobsRunning--
 		}
-		s.repo.AddQueue(queue)
+		if err := s.repo.AddQueue(queue); err != nil {
+			log.Printf("Failed to update queue %s after completing job %s: %v", queue.Name, currentJob.ID, err)
+		}
 	}
 
 	log.Printf("Job %s completed with status %s", currentJob.ID, status)
+}
+
+func (s *Scheduler) releaseAllocatedGPUs(gpuIDs []string) {
+	if err := s.repo.ReleaseGPUs(nonEmptyGPUIDs(gpuIDs)); err != nil {
+		log.Printf("Failed to release GPUs %v: %v", gpuIDs, err)
+	}
+}
+
+func nonEmptyGPUIDs(gpuIDs []string) []string {
+	filtered := make([]string, 0, len(gpuIDs))
+	for _, gpuID := range gpuIDs {
+		if gpuID != "" {
+			filtered = append(filtered, gpuID)
+		}
+	}
+	return filtered
 }
 
 func (s *Scheduler) checkRunningJobs() {
@@ -217,15 +250,17 @@ func (s *Scheduler) CancelJob(jobID string) error {
 	wasRunning := job.Status == domain.JobStatusRunning
 
 	// Release allocated GPUs if any
-	for _, gpuID := range job.AllocatedGPUs {
-		s.repo.UpdateGPUAllocation(gpuID, "")
+	if err := s.repo.ReleaseGPUs(job.AllocatedGPUs); err != nil {
+		return err
 	}
 
 	// Update job status
 	job.Status = domain.JobStatusCanceled
 	job.CompletedAt = time.Now()
 	job.Logs = append(job.Logs, fmt.Sprintf("[%s] Job canceled by user", time.Now().Format("15:04:05")))
-	s.repo.AddJob(job)
+	if err := s.repo.AddJob(job); err != nil {
+		return err
+	}
 
 	// Update queue stats
 	queue, err := s.repo.GetQueue(job.Queue)
@@ -235,7 +270,9 @@ func (s *Scheduler) CancelJob(jobID string) error {
 		} else if wasRunning && queue.JobsRunning > 0 {
 			queue.JobsRunning--
 		}
-		s.repo.AddQueue(queue)
+		if err := s.repo.AddQueue(queue); err != nil {
+			return err
+		}
 	}
 
 	return nil

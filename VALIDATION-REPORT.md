@@ -190,7 +190,7 @@ Job Submit → Find N free GPUs
 ### Manual Validation
 ```bash
 # Start server (Docker Desktop required)
-docker run -p 8080:8080 kuafu:mvp /app/kuafu-server
+docker run -p 8080:8080 kuafu:mvp /app/kuafu-server --mode lab
 
 # Test job submission
 export KUAFU_API_URL=http://localhost:8080
@@ -255,14 +255,14 @@ docker build -t kuafu:mvp .
 
 ### Run Server
 ```bash
-docker run -p 8080:8080 kuafu:mvp /app/kuafu-server
+docker run -p 8080:8080 kuafu:mvp /app/kuafu-server --mode lab
 ```
 
 ### Local Build (if Go installed)
 ```bash
 go build -o bin/kuafu-server ./cmd/kuafu-server
 go build -o bin/kuafu ./cmd/kuafu
-./bin/kuafu-server
+./bin/kuafu-server --mode lab
 ```
 
 ### Run Tests

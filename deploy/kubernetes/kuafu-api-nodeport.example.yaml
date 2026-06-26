@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuafu-api
+  namespace: kuafu-system
+  annotations:
+    kuafu.dev/warning: "Do not apply blindly while another host process owns port 30000 on any node. A01 currently uses 30000 for open-webui."
+  labels:
+    app.kubernetes.io/name: kuafu
+    app.kubernetes.io/component: api
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: kuafu
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 30000

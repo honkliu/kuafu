@@ -28,6 +28,8 @@ Target capabilities:
 
 The lab prototype should stay available as `lab mode` for local development and UI/API iteration.
 
+The server binary must not silently run simulated scheduling in production mode. Production mode should fail fast until Kubernetes, GPU device plugin, scheduler adapter, and persistent repository wiring exist.
+
 Keep:
 
 - Domain model concepts for nodes, GPUs, queues, and jobs.
@@ -58,6 +60,8 @@ Replace for production:
 
 ### M1: A00/A01 Kubernetes Foundation
 
+Status: complete with NVIDIA device plugin fallback. GPU Operator remains a follow-up.
+
 Goal: turn A00/A01 into the first real Kuafu Kubernetes testbed.
 
 Acceptance criteria:
@@ -67,7 +71,7 @@ Acceptance criteria:
 - `kubectl get nodes` shows both nodes Ready.
 - NVIDIA GPU Operator or NVIDIA device plugin exposes 8 GPUs per node.
 - A GPU pod requesting `nvidia.com/gpu: 1` runs and sees `nvidia-smi`.
-- Basic node/GPU metrics are available through DCGM/Prometheus path or documented as a gap.
+- Basic node/GPU metrics are documented as a gap until DCGM/Prometheus is installed.
 - Bootstrap steps are documented and repeatable.
 
 ### M2: Scheduler Adapter Spike

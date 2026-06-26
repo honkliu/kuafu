@@ -182,7 +182,7 @@ docker run --rm -v ${PWD}:/workspace kuafu:mvp go test -v ./...
 ### Manual Testing
 ```bash
 # Start server
-docker run --rm -p 8080:8080 kuafu:mvp /app/kuafu-server
+docker run --rm -p 8080:8080 kuafu:mvp /app/kuafu-server --mode lab
 
 # In another terminal
 export KUAFU_API_URL=http://localhost:8080

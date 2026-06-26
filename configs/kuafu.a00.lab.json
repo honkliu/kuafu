@@ -1,0 +1,11 @@
+{
+  "server": {
+    "addr": ":30000"
+  },
+  "runtime": {
+    "mode": "lab"
+  },
+  "lab": {
+    "seedData": true
+  }
+}

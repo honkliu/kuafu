@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -25,7 +27,10 @@ func main() {
 	root.StringVar(&apiURL, "api-url", getEnv("KUAFU_API_URL", "http://localhost:8080"), "Kuafu API server URL")
 	root.BoolVar(&fixture, "fixture", false, "Use offline fixture mode (no API calls)")
 	root.Usage = printUsage
-	root.Parse(os.Args[1:])
+	if err := root.Parse(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(2)
+	}
 
 	if root.NArg() < 1 {
 		printUsage()
@@ -170,7 +175,10 @@ func listNodes() {
 			node.PrivateIP,
 		)
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing nodes: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func describeNode(name string) {
@@ -250,7 +258,10 @@ func listGPUs() {
 			allocated,
 		)
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing GPUs: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func submitJob(args []string) {
@@ -287,7 +298,12 @@ func submitJob(args []string) {
 			}
 		case "-g", "--gpus":
 			if i+1 < len(args) {
-				fmt.Sscanf(args[i+1], "%d", &gpuCount)
+				parsedGPUCount, err := strconv.Atoi(args[i+1])
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "invalid GPU count %q: %v\n", args[i+1], err)
+					os.Exit(1)
+				}
+				gpuCount = parsedGPUCount
 				i++
 			}
 		}
@@ -318,8 +334,13 @@ func submitJob(args []string) {
 		GPUCount: gpuCount,
 	}
 
-	reqBody, _ := json.Marshal(req)
-	resp, err := http.Post(apiURL+"/api/v1/jobs", "application/json", strings.NewReader(string(reqBody)))
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error encoding job request: %v\n", err)
+		os.Exit(1)
+	}
+
+	resp, err := http.Post(apiURL+"/api/v1/jobs", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error submitting job: %v\n", err)
 		os.Exit(1)
@@ -327,13 +348,15 @@ func submitJob(args []string) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Error: %s\n", string(body))
+		fmt.Fprintf(os.Stderr, "Error: %s\n", readResponseBody(resp.Body))
 		os.Exit(1)
 	}
 
 	var job domain.Job
-	json.NewDecoder(resp.Body).Decode(&job)
+	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding submitted job: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Printf("Job %s submitted successfully\n", job.ID)
 	fmt.Printf("Status: %s\n", job.Status)
 	fmt.Printf("Queue: %s\n", job.Queue)
@@ -356,7 +379,10 @@ func listJobs() {
 	var result struct {
 		Jobs []*domain.Job `json:"jobs"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding jobs: %v\n", err)
+		os.Exit(1)
+	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tNAME\tQUEUE\tSTATUS\tGPUs\tSUBMITTED")
@@ -370,7 +396,10 @@ func listJobs() {
 			job.SubmittedAt.Format("15:04:05"),
 		)
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing jobs: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func describeJob(jobID string) {
@@ -387,13 +416,15 @@ func describeJob(jobID string) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Error: %s\n", string(body))
+		fmt.Fprintf(os.Stderr, "Error: %s\n", readResponseBody(resp.Body))
 		os.Exit(1)
 	}
 
 	var job domain.Job
-	json.NewDecoder(resp.Body).Decode(&job)
+	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding job: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("Job ID:        %s\n", job.ID)
 	fmt.Printf("Name:          %s\n", job.Name)
@@ -426,7 +457,11 @@ func cancelJob(jobID string) {
 		os.Exit(1)
 	}
 
-	req, _ := http.NewRequest(http.MethodDelete, apiURL+"/api/v1/jobs/"+jobID, nil)
+	req, err := http.NewRequest(http.MethodDelete, apiURL+"/api/v1/jobs/"+jobID, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating cancel request: %v\n", err)
+		os.Exit(1)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error canceling job: %v\n", err)
@@ -435,8 +470,7 @@ func cancelJob(jobID string) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Error: %s\n", string(body))
+		fmt.Fprintf(os.Stderr, "Error: %s\n", readResponseBody(resp.Body))
 		os.Exit(1)
 	}
 
@@ -457,15 +491,17 @@ func getJobLogs(jobID string) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Error: %s\n", string(body))
+		fmt.Fprintf(os.Stderr, "Error: %s\n", readResponseBody(resp.Body))
 		os.Exit(1)
 	}
 
 	var result struct {
 		Logs []string `json:"logs"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding logs: %v\n", err)
+		os.Exit(1)
+	}
 
 	for _, log := range result.Logs {
 		fmt.Println(log)
@@ -488,7 +524,10 @@ func listQueues() {
 	var result struct {
 		Queues []*domain.Queue `json:"queues"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding queues: %v\n", err)
+		os.Exit(1)
+	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tMAX GPUs\tPRIORITY\tQUEUED\tRUNNING")
@@ -501,7 +540,10 @@ func listQueues() {
 			q.JobsRunning,
 		)
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing queues: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func describeQueue(name string) {
@@ -518,13 +560,15 @@ func describeQueue(name string) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Error: %s\n", string(body))
+		fmt.Fprintf(os.Stderr, "Error: %s\n", readResponseBody(resp.Body))
 		os.Exit(1)
 	}
 
 	var queue domain.Queue
-	json.NewDecoder(resp.Body).Decode(&queue)
+	if err := json.NewDecoder(resp.Body).Decode(&queue); err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding queue: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("Name:          %s\n", queue.Name)
 	fmt.Printf("Max GPUs:      %d\n", queue.MaxGPUs)
@@ -541,8 +585,7 @@ func fetchNodes() ([]*domain.Node, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %s", string(body))
+		return nil, fmt.Errorf("API error: %s", readResponseBody(resp.Body))
 	}
 
 	var result struct {
@@ -563,8 +606,7 @@ func fetchNode(name string) (*domain.Node, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %s", string(body))
+		return nil, fmt.Errorf("API error: %s", readResponseBody(resp.Body))
 	}
 
 	var node domain.Node
@@ -583,8 +625,7 @@ func fetchGPUs() ([]*domain.GPU, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %s", string(body))
+		return nil, fmt.Errorf("API error: %s", readResponseBody(resp.Body))
 	}
 
 	var result struct {
@@ -598,17 +639,40 @@ func fetchGPUs() ([]*domain.GPU, error) {
 }
 
 func getFixtureNodes() []*domain.Node {
-	repo := repository.NewMemoryRepository()
-	fixtures.SeedTestbedA00A01(repo.AddNode, repo.AddGPU, repo.AddQueue, repo.AddJob)
-	nodes, _ := repo.ListNodes()
+	repo := seedFixtureRepository()
+	nodes, err := repo.ListNodes()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing fixture nodes: %v\n", err)
+		os.Exit(1)
+	}
 	return nodes
 }
 
 func getFixtureGPUs() []*domain.GPU {
-	repo := repository.NewMemoryRepository()
-	fixtures.SeedTestbedA00A01(repo.AddNode, repo.AddGPU, repo.AddQueue, repo.AddJob)
-	gpus, _ := repo.ListGPUs("")
+	repo := seedFixtureRepository()
+	gpus, err := repo.ListGPUs("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing fixture GPUs: %v\n", err)
+		os.Exit(1)
+	}
 	return gpus
+}
+
+func seedFixtureRepository() *repository.MemoryRepository {
+	repo := repository.NewMemoryRepository()
+	if err := fixtures.SeedTestbedA00A01(repo.AddNode, repo.AddGPU, repo.AddQueue, repo.AddJob); err != nil {
+		fmt.Fprintf(os.Stderr, "Error seeding fixture data: %v\n", err)
+		os.Exit(1)
+	}
+	return repo
+}
+
+func readResponseBody(body io.Reader) string {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return fmt.Sprintf("failed to read response body: %v", err)
+	}
+	return string(data)
 }
 
 func getEnv(key, defaultValue string) string {
