@@ -21,7 +21,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: Aptos, 'Segoe UI', sans-serif;
+  font-family: 'Courier New', Courier, monospace;
 }
 
 button,
@@ -301,6 +301,7 @@ button:disabled {
 .table-wrap {
   border: 1px solid var(--line);
   border-radius: 14px;
+  max-width: 100%;
   overflow: auto;
 }
 
@@ -460,11 +461,13 @@ button:disabled {
   background: white;
   border: 1px solid var(--line);
   border-radius: 10px;
+  min-width: 0;
   padding: 10px 11px;
+  width: 100%;
 }
 
 .task-template-card textarea {
-  font-family: Consolas, 'Liberation Mono', monospace;
+  font-family: 'Courier New', Courier, monospace;
   font-size: 0.82rem;
   line-height: 1.4;
   resize: vertical;
@@ -492,7 +495,7 @@ button:disabled {
 
 .inherited-command code {
   color: var(--slate);
-  font-family: Consolas, 'Liberation Mono', monospace;
+  font-family: 'Courier New', Courier, monospace;
   font-size: 0.82rem;
   overflow-wrap: anywhere;
 }
@@ -537,7 +540,7 @@ button:disabled {
   border: 1px solid #bfdbfe;
   border-radius: 999px;
   color: #1e3a8a;
-  font-family: Consolas, 'Liberation Mono', monospace;
+  font-family: 'Courier New', Courier, monospace;
   font-size: 0.78rem;
   font-weight: 800;
   padding: 5px 8px;
@@ -588,6 +591,7 @@ button:disabled {
 
 .nested-panel {
   box-shadow: none;
+  min-width: 0;
 }
 
 .compact-table {
@@ -885,7 +889,7 @@ button:disabled {
   background: #0f172a;
   border-radius: 12px;
   color: #e2e8f0;
-  font-family: Consolas, 'Liberation Mono', monospace;
+  font-family: 'Courier New', Courier, monospace;
   font-size: 0.86rem;
   overflow-x: auto;
   padding: 12px;
@@ -938,7 +942,7 @@ button:disabled {
   background: white;
   border: 1px solid var(--line);
   border-radius: 10px;
-  font-family: Consolas, 'Liberation Mono', monospace;
+  font-family: 'Courier New', Courier, monospace;
   font-size: 0.82rem;
   line-height: 1.4;
   padding: 10px 11px;
@@ -947,6 +951,12 @@ button:disabled {
 
 .queue-form {
   grid-template-columns: repeat(5, minmax(140px, 1fr));
+}
+
+.queue-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr;
 }
 
 .search-box input {
@@ -1170,7 +1180,7 @@ button:disabled {
   background: #0f172a;
   border-radius: 12px;
   color: #e2e8f0;
-  font-family: Consolas, 'Liberation Mono', monospace;
+  font-family: 'Courier New', Courier, monospace;
   font-size: 0.82rem;
   line-height: 1.45;
   max-height: 360px;
