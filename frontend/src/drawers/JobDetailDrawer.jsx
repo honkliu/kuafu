@@ -82,22 +82,39 @@ function formatMb(value) {
 
 function launcherSpecFromJob(job) {
   return {
-    apiVersion: 'kuafu.ai/v1alpha1',
-    kind: 'LauncherJob',
-    metadata: { name: job.name, project: job.project || undefined },
-    spec: {
-      queue: job.queue,
-      replicaPolicy: 'fixed',
-      workingDirectory: job.tasks?.[0]?.workingDirectory || '/workspace',
-      docker: { image: job.image, options: job.tasks?.[0]?.dockerOptions || [] },
-      env: job.sharedEnv || [],
-      tasks: (job.taskTemplates || []).length ? job.taskTemplates : [{ name: 'master', role: 'master', replicas: 1, image: job.image, command: job.command, gpuCount: job.gpuCount, cpuCount: 4, memoryGb: 16 }],
-    },
+    name: job.name,
+    project: job.project || undefined,
+    queue: job.queue,
+    replicaPolicy: 'fixed',
+    workingDirectory: job.tasks?.[0]?.workingDirectory || '/workspace',
+    dependencies: [],
+    docker: { image: job.image, options: job.tasks?.[0]?.dockerOptions || [] },
+    env: job.sharedEnv || [],
+    tasks: (job.taskTemplates || []).length ? job.taskTemplates : [{ name: 'master', role: 'master', replicas: 1, image: job.image, command: job.command, gpuCount: job.gpuCount, cpuCount: 4, memoryGb: 16 }],
   };
 }
 
 function launcherSpecToYaml(spec) {
-  const env = spec.spec.env || [];
-  const tasks = spec.spec.tasks || [];
-  return [`apiVersion: ${spec.apiVersion || 'kuafu.ai/v1alpha1'}`, `kind: ${spec.kind || 'LauncherJob'}`, 'metadata:', `  name: ${spec.metadata?.name || 'unnamed-job'}`, spec.metadata?.project ? `  project: ${spec.metadata.project}` : '', 'spec:', `  queue: ${spec.spec.queue || 'default'}`, `  replicaPolicy: ${spec.spec.replicaPolicy || 'fixed'}`, `  workingDirectory: ${spec.spec.workingDirectory || '/workspace'}`, '  docker:', `    image: ${spec.spec.docker?.image || ''}`, `    options: [${(spec.spec.docker?.options || []).join(', ')}]`, '  env:', ...(env.length ? env.map((item) => `    - ${item.name}: ${item.value || ''}`) : ['    []']), '  tasks:', ...tasks.flatMap((task) => [`    - name: ${task.name}`, `      role: ${task.role}`, `      replicas: ${task.replicas || 1}`, task.image ? `      image: ${task.image}` : '', `      command: ${task.command || ''}`, `      workingDirectory: ${task.workingDirectory || spec.spec.workingDirectory || '/workspace'}`, `      dockerOptions: [${(task.dockerOptions || spec.spec.docker?.options || []).join(', ')}]`, `      gpuCount: ${task.gpuCount || 0}`, `      cpuCount: ${task.cpuCount || 0}`, `      memoryGb: ${task.memoryGb || 0}`])].filter((line) => line !== '').join('\n');
+  spec = normalizeLauncherSpec(spec);
+  const env = spec.env || [];
+  const dependencies = spec.dependencies || [];
+  const tasks = spec.tasks || [];
+  return [`name: ${spec.name || 'unnamed-job'}`, spec.project ? `project: ${spec.project}` : '', `queue: ${spec.queue || 'default'}`, `replicaPolicy: ${spec.replicaPolicy || 'fixed'}`, `workingDirectory: ${spec.workingDirectory || '/workspace'}`, 'dependencies:', ...(dependencies.length ? dependencies.map((item) => `  - ${item}`) : ['  []']), 'docker:', `  image: ${spec.docker?.image || ''}`, `  options: [${(spec.docker?.options || []).join(', ')}]`, 'env:', ...(env.length ? env.map((item) => `  - ${item.name}: ${item.value || ''}`) : ['  []']), 'tasks:', ...tasks.flatMap((task) => [`  - name: ${task.name}`, `    role: ${task.role}`, `    replicas: ${task.replicas || 1}`, task.image ? `    image: ${task.image}` : '', `    command: ${task.command || ''}`, `    workingDirectory: ${task.workingDirectory || spec.workingDirectory || '/workspace'}`, `    dockerOptions: [${(task.dockerOptions || spec.docker?.options || []).join(', ')}]`, `    gpuCount: ${task.gpuCount || 0}`, `    cpuCount: ${task.cpuCount || 0}`, `    memoryGb: ${task.memoryGb || 0}`])].filter((line) => line !== '').join('\n');
+}
+
+function normalizeLauncherSpec(spec) {
+  if (spec.spec || spec.metadata) {
+    return {
+      name: spec.name || spec.metadata?.name || 'unnamed-job',
+      project: spec.project || spec.metadata?.project || undefined,
+      queue: spec.queue || spec.spec?.queue || 'default',
+      replicaPolicy: spec.replicaPolicy || spec.spec?.replicaPolicy || 'fixed',
+      workingDirectory: spec.workingDirectory || spec.spec?.workingDirectory || '/workspace',
+      dependencies: spec.dependencies || spec.spec?.dependencies || [],
+      docker: spec.docker?.image ? spec.docker : (spec.spec?.docker || {}),
+      env: spec.env?.length ? spec.env : (spec.spec?.env || []),
+      tasks: spec.tasks?.length ? spec.tasks : (spec.spec?.tasks || []),
+    };
+  }
+  return spec;
 }

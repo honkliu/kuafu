@@ -486,24 +486,25 @@ func requestFromLauncherSpec(req domain.JobSubmitRequest) domain.JobSubmitReques
 	if req.LauncherSpec == nil {
 		return req
 	}
-	spec := req.LauncherSpec
+	spec := normalizeJobCentricSpec(*req.LauncherSpec)
+	req.LauncherSpec = &spec
 	if req.Name == "" {
-		req.Name = strings.TrimSpace(spec.Metadata.Name)
+		req.Name = strings.TrimSpace(spec.Name)
 	}
 	if req.Project == "" {
-		req.Project = strings.TrimSpace(spec.Metadata.Project)
+		req.Project = strings.TrimSpace(spec.Project)
 	}
 	if req.Queue == "" {
-		req.Queue = strings.TrimSpace(spec.Spec.Queue)
+		req.Queue = strings.TrimSpace(spec.Queue)
 	}
 	if req.Image == "" {
-		req.Image = strings.TrimSpace(spec.Spec.Docker.Image)
+		req.Image = strings.TrimSpace(spec.Docker.Image)
 	}
 	if len(req.SharedEnv) == 0 {
-		req.SharedEnv = spec.Spec.Env
+		req.SharedEnv = spec.Env
 	}
 	if len(req.TaskTemplates) == 0 {
-		req.TaskTemplates = spec.Spec.Tasks
+		req.TaskTemplates = spec.Tasks
 	}
 	if req.Command == "" && len(req.TaskTemplates) > 0 {
 		req.Command = req.TaskTemplates[0].Command
@@ -511,49 +512,68 @@ func requestFromLauncherSpec(req domain.JobSubmitRequest) domain.JobSubmitReques
 	return req
 }
 
+func normalizeJobCentricSpec(spec domain.LauncherSpec) domain.LauncherSpec {
+	if spec.Name == "" {
+		spec.Name = spec.Metadata.Name
+	}
+	if spec.Project == "" {
+		spec.Project = spec.Metadata.Project
+	}
+	if spec.Queue == "" {
+		spec.Queue = spec.Spec.Queue
+	}
+	if spec.ReplicaPolicy == "" {
+		spec.ReplicaPolicy = spec.Spec.ReplicaPolicy
+	}
+	if spec.WorkingDirectory == "" {
+		spec.WorkingDirectory = spec.Spec.WorkingDirectory
+	}
+	if spec.Docker.Image == "" && spec.Spec.Docker.Image != "" {
+		spec.Docker = spec.Spec.Docker
+	}
+	if len(spec.Env) == 0 {
+		spec.Env = spec.Spec.Env
+	}
+	if len(spec.Tasks) == 0 {
+		spec.Tasks = spec.Spec.Tasks
+	}
+	if spec.ReplicaPolicy == "" {
+		spec.ReplicaPolicy = "fixed"
+	}
+	return spec
+}
+
 func normalizeLauncherSpec(req domain.JobSubmitRequest) *domain.LauncherSpec {
 	if req.LauncherSpec != nil {
-		spec := *req.LauncherSpec
-		if spec.APIVersion == "" {
-			spec.APIVersion = "kuafu.ai/v1alpha1"
+		spec := normalizeJobCentricSpec(*req.LauncherSpec)
+		if spec.Name == "" {
+			spec.Name = req.Name
 		}
-		if spec.Kind == "" {
-			spec.Kind = "LauncherJob"
+		if spec.Project == "" {
+			spec.Project = req.Project
 		}
-		if spec.Metadata.Name == "" {
-			spec.Metadata.Name = req.Name
+		if spec.Queue == "" {
+			spec.Queue = req.Queue
 		}
-		if spec.Metadata.Project == "" {
-			spec.Metadata.Project = req.Project
+		if spec.Docker.Image == "" {
+			spec.Docker.Image = req.Image
 		}
-		if spec.Spec.Queue == "" {
-			spec.Spec.Queue = req.Queue
+		if len(spec.Env) == 0 {
+			spec.Env = normalizeEnv(req.SharedEnv)
 		}
-		if spec.Spec.Docker.Image == "" {
-			spec.Spec.Docker.Image = req.Image
-		}
-		if len(spec.Spec.Env) == 0 {
-			spec.Spec.Env = normalizeEnv(req.SharedEnv)
-		}
-		if len(spec.Spec.Tasks) == 0 {
-			spec.Spec.Tasks = normalizeTaskTemplates(req)
+		if len(spec.Tasks) == 0 {
+			spec.Tasks = normalizeTaskTemplates(req)
 		}
 		return &spec
 	}
 	return &domain.LauncherSpec{
-		APIVersion: "kuafu.ai/v1alpha1",
-		Kind:       "LauncherJob",
-		Metadata: domain.LauncherMetadata{
-			Name:    req.Name,
-			Project: req.Project,
-		},
-		Spec: domain.LauncherJobSpec{
-			Queue:         req.Queue,
-			ReplicaPolicy: "fixed",
-			Docker:        domain.LauncherDocker{Image: req.Image},
-			Env:           normalizeEnv(req.SharedEnv),
-			Tasks:         normalizeTaskTemplates(req),
-		},
+		Name:          req.Name,
+		Project:       req.Project,
+		Queue:         req.Queue,
+		ReplicaPolicy: "fixed",
+		Docker:        domain.LauncherDocker{Image: req.Image},
+		Env:           normalizeEnv(req.SharedEnv),
+		Tasks:         normalizeTaskTemplates(req),
 	}
 }
 
@@ -598,10 +618,10 @@ func normalizeTaskTemplates(req domain.JobSubmitRequest) []domain.TaskTemplate {
 				template.Command = req.Command
 			}
 			if template.WorkingDirectory == "" && req.LauncherSpec != nil {
-				template.WorkingDirectory = req.LauncherSpec.Spec.WorkingDirectory
+				template.WorkingDirectory = req.LauncherSpec.WorkingDirectory
 			}
 			if len(template.DockerOptions) == 0 && req.LauncherSpec != nil {
-				template.DockerOptions = append([]string{}, req.LauncherSpec.Spec.Docker.Options...)
+				template.DockerOptions = append([]string{}, req.LauncherSpec.Docker.Options...)
 			}
 			if template.GPUCount < 0 {
 				template.GPUCount = 0
@@ -614,8 +634,8 @@ func normalizeTaskTemplates(req domain.JobSubmitRequest) []domain.TaskTemplate {
 	workingDirectory := ""
 	dockerOptions := []string(nil)
 	if req.LauncherSpec != nil {
-		workingDirectory = req.LauncherSpec.Spec.WorkingDirectory
-		dockerOptions = req.LauncherSpec.Spec.Docker.Options
+		workingDirectory = req.LauncherSpec.WorkingDirectory
+		dockerOptions = req.LauncherSpec.Docker.Options
 	}
 	return []domain.TaskTemplate{
 		{Name: "master", Role: "master", Replicas: 1, Image: req.Image, Command: req.Command, WorkingDirectory: workingDirectory, DockerOptions: dockerOptions, GPUCount: req.GPUCount},

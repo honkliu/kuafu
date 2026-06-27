@@ -102,10 +102,20 @@ type JobSubmitRequest struct {
 }
 
 type LauncherSpec struct {
-	APIVersion string           `json:"apiVersion" yaml:"apiVersion"`
-	Kind       string           `json:"kind" yaml:"kind"`
-	Metadata   LauncherMetadata `json:"metadata" yaml:"metadata"`
-	Spec       LauncherJobSpec  `json:"spec" yaml:"spec"`
+	Name         string           `json:"name,omitempty" yaml:"name,omitempty"`
+	Project      string           `json:"project,omitempty" yaml:"project,omitempty"`
+	Queue        string           `json:"queue,omitempty" yaml:"queue,omitempty"`
+	Description  string           `json:"description,omitempty" yaml:"description,omitempty"`
+	Dependencies []string         `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
+	ReplicaPolicy string          `json:"replicaPolicy,omitempty" yaml:"replicaPolicy,omitempty"`
+	WorkingDirectory string       `json:"workingDirectory,omitempty" yaml:"workingDirectory,omitempty"`
+	Docker       LauncherDocker   `json:"docker,omitempty" yaml:"docker,omitempty"`
+	Env          []EnvVar         `json:"env,omitempty" yaml:"env,omitempty"`
+	Tasks        []TaskTemplate   `json:"tasks,omitempty" yaml:"tasks,omitempty"`
+	APIVersion   string           `json:"apiVersion,omitempty" yaml:"apiVersion,omitempty"`
+	Kind         string           `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Metadata     LauncherMetadata `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+	Spec         LauncherJobSpec  `json:"spec,omitempty" yaml:"spec,omitempty"`
 }
 
 type LauncherMetadata struct {

@@ -431,7 +431,7 @@ func loadJobSubmitRequestFromSpec(path string) (domain.JobSubmitRequest, error) 
 }
 
 func parseLauncherYAML(content string) domain.LauncherSpec {
-	spec := domain.LauncherSpec{APIVersion: "kuafu.ai/v1alpha1", Kind: "LauncherJob"}
+	spec := domain.LauncherSpec{ReplicaPolicy: "fixed"}
 	section := ""
 	nested := ""
 	currentTask := -1
@@ -446,24 +446,63 @@ func parseLauncherYAML(content string) domain.LauncherSpec {
 			currentTask = -1
 			key, value := splitYAMLPair(trimmed)
 			switch key {
+			case "name":
+				spec.Name = value
+			case "project":
+				spec.Project = value
+			case "queue":
+				spec.Queue = value
+			case "description":
+				spec.Description = value
+			case "replicaPolicy":
+				spec.ReplicaPolicy = value
+			case "workingDirectory":
+				spec.WorkingDirectory = value
 			case "apiVersion":
 				spec.APIVersion = value
 			case "kind":
 				spec.Kind = value
-			case "metadata", "spec":
+			case "metadata", "spec", "docker", "env", "tasks", "dependencies":
 				section = key
 				nested = ""
 			}
 			continue
 		}
 		key, value := splitYAMLPair(strings.TrimPrefix(trimmed, "- "))
+		if section == "dependencies" {
+			if strings.HasPrefix(trimmed, "- ") {
+				spec.Dependencies = append(spec.Dependencies, key)
+			}
+			continue
+		}
 		if section == "metadata" {
 			switch key {
 			case "name":
+				spec.Name = value
 				spec.Metadata.Name = value
 			case "project":
+				spec.Project = value
 				spec.Metadata.Project = value
 			}
+			continue
+		}
+		if section == "docker" {
+			if key == "image" {
+				spec.Docker.Image = value
+			}
+			if key == "options" {
+				spec.Docker.Options = parseYAMLList(value)
+			}
+			continue
+		}
+		if section == "env" {
+			if strings.HasPrefix(trimmed, "- ") {
+				spec.Env = append(spec.Env, domain.EnvVar{Name: key, Value: value})
+			}
+			continue
+		}
+		if section == "tasks" {
+			parseLauncherTaskLine(&spec.Tasks, &currentTask, key, value, trimmed)
 			continue
 		}
 		if section != "spec" {
@@ -476,67 +515,78 @@ func parseLauncherYAML(content string) domain.LauncherSpec {
 		if nested == "" {
 			switch key {
 			case "queue":
+				spec.Queue = value
 				spec.Spec.Queue = value
 			case "replicaPolicy":
+				spec.ReplicaPolicy = value
 				spec.Spec.ReplicaPolicy = value
 			case "workingDirectory":
+				spec.WorkingDirectory = value
 				spec.Spec.WorkingDirectory = value
 			}
 			continue
 		}
 		if nested == "docker" {
 			if key == "image" {
+				spec.Docker.Image = value
 				spec.Spec.Docker.Image = value
 			}
 			if key == "options" {
-				spec.Spec.Docker.Options = parseYAMLList(value)
+				spec.Docker.Options = parseYAMLList(value)
+				spec.Spec.Docker.Options = spec.Docker.Options
 			}
 			continue
 		}
 		if nested == "env" {
 			if strings.HasPrefix(trimmed, "- ") {
-				spec.Spec.Env = append(spec.Spec.Env, domain.EnvVar{Name: key, Value: value})
+				spec.Env = append(spec.Env, domain.EnvVar{Name: key, Value: value})
+				spec.Spec.Env = spec.Env
 			}
 			continue
 		}
 		if nested == "tasks" {
-			if strings.HasPrefix(trimmed, "- ") {
-				spec.Spec.Tasks = append(spec.Spec.Tasks, domain.TaskTemplate{})
-				currentTask = len(spec.Spec.Tasks) - 1
-			}
-			if currentTask < 0 {
-				continue
-			}
-			task := &spec.Spec.Tasks[currentTask]
-			switch key {
-			case "name":
-				task.Name = value
-			case "role":
-				task.Role = value
-			case "replicas":
-				task.Replicas = atoiCLI(value)
-			case "minReplicas":
-				task.MinReplicas = atoiCLI(value)
-			case "maxReplicas":
-				task.MaxReplicas = atoiCLI(value)
-			case "image":
-				task.Image = value
-			case "command":
-				task.Command = value
-			case "workingDirectory":
-				task.WorkingDirectory = value
-			case "dockerOptions":
-				task.DockerOptions = parseYAMLList(value)
-			case "gpuCount":
-				task.GPUCount = atoiCLI(value)
-			case "cpuCount":
-				task.CPUCount = atoiCLI(value)
-			case "memoryGb":
-				task.MemoryGB = atoiCLI(value)
-			}
+			parseLauncherTaskLine(&spec.Tasks, &currentTask, key, value, trimmed)
+			spec.Spec.Tasks = spec.Tasks
 		}
 	}
 	return spec
+}
+
+func parseLauncherTaskLine(tasks *[]domain.TaskTemplate, currentTask *int, key string, value string, trimmed string) {
+	if strings.HasPrefix(trimmed, "- ") {
+		*tasks = append(*tasks, domain.TaskTemplate{})
+		*currentTask = len(*tasks) - 1
+	}
+	if *currentTask < 0 {
+		return
+	}
+	task := &(*tasks)[*currentTask]
+	switch key {
+	case "name":
+		task.Name = value
+	case "role":
+		task.Role = value
+	case "replicas":
+		task.Replicas = atoiCLI(value)
+	case "minReplicas":
+		task.MinReplicas = atoiCLI(value)
+	case "maxReplicas":
+		task.MaxReplicas = atoiCLI(value)
+	case "image":
+		task.Image = value
+	case "command":
+		task.Command = value
+	case "workingDirectory":
+		task.WorkingDirectory = value
+	case "dockerOptions":
+		task.DockerOptions = parseYAMLList(value)
+	case "gpuCount":
+		task.GPUCount = atoiCLI(value)
+	case "cpuCount":
+		task.CPUCount = atoiCLI(value)
+	case "memoryGb":
+		task.MemoryGB = atoiCLI(value)
+	}
 }
 
 func splitYAMLPair(line string) (string, string) {

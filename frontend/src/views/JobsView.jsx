@@ -5,14 +5,15 @@ import { catalogTemplates } from '../data/productPlan.js';
 import { formatDate } from '../utils/format.js';
 
 const defaultImage = 'nvidia/cuda:12.0-runtime';
-const defaultCommand = 'nvidia-smi';
-const emptyJobForm = { name: '', queue: 'default', project: '', image: defaultImage, command: defaultCommand, useSameCommand: true, replicaPolicy: 'fixed', workingDirectory: '/workspace', dockerOptions: '--network=host\n--ipc=host', sharedEnv: '', taskTemplates: defaultDistributedTemplates(defaultCommand, defaultImage) };
+const defaultCommand = './a.out -p $TASK_RANK --master $TASK0_ADDRESS --world-size $WORLD_SIZE';
+const emptyJobForm = { name: '', queue: 'default', project: '', image: defaultImage, command: defaultCommand, useSameCommand: false, replicaPolicy: 'fixed', workingDirectory: '/workspace', dockerOptions: '--network=host\n--ipc=host', sharedEnv: '', taskTemplates: defaultDistributedTemplates(defaultCommand, defaultImage) };
 
 export default function JobsView({ jobs, queues, reservedEnv = [], filters, setFilters, openJobDetail, submitJob, runJobAction }) {
   const [jobForm, setJobForm] = useState(emptyJobForm);
   const [preview, setPreview] = useState(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [shareSpec, setShareSpec] = useState(null);
   const taskTemplates = effectiveTaskTemplates(jobForm);
   const taskGpuTotal = totalTemplateGPUs(taskTemplates);
   const taskCount = totalTemplateCount(taskTemplates);
@@ -81,10 +82,20 @@ export default function JobsView({ jobs, queues, reservedEnv = [], filters, setF
     }
   }
 
-  async function shareJob(job) {
+  function shareJob(job) {
     const yaml = launcherSpecToYaml(job.launcherSpec || launcherSpecFromJob(job));
-    await navigator.clipboard?.writeText(yaml);
-    setMessage(`Copied launcher YAML for ${job.name}.`);
+    setShareSpec({ jobName: job.name, yaml, copied: false });
+    setMessage(`Share spec opened for ${job.name}.`);
+  }
+
+  async function copyShareSpec() {
+    if (!shareSpec) return;
+    try {
+      await navigator.clipboard?.writeText(shareSpec.yaml);
+      setShareSpec({ ...shareSpec, copied: true });
+    } catch (err) {
+      setError(`Copy failed: ${err.message}`);
+    }
   }
 
   async function onAction(job, action) {
@@ -140,7 +151,18 @@ export default function JobsView({ jobs, queues, reservedEnv = [], filters, setF
     </section>}
     <div className="filter-bar"><label className="search-box"><Search size={16} /><input placeholder="Search jobs, IDs, commands" value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} /></label><select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>{statuses.map((status) => <option key={status}>{status}</option>)}</select><select value={filters.queue} onChange={(event) => setFilters({ ...filters, queue: event.target.value })}><option value="all">all queues</option>{queues.map((queue) => <option key={queue.name} value={queue.name}>{queue.name}</option>)}</select></div>
     <div className="table-wrap"><table className="data-table"><thead><tr><th>Job</th><th>Status</th><th>Queue</th><th>Image</th><th>GPU</th><th>Submitted</th><th>Actions</th></tr></thead><tbody>{filtered.map((job) => <tr key={job.id}><td><strong>{job.name}</strong><small>{job.id}</small></td><td><StatusBadge status={job.status} /></td><td>{job.queue}</td><td className="truncate-cell">{job.image || '-'}</td><td>{job.gpuCount}</td><td>{formatDate(job.submittedAt)}</td><td><div className="row-actions"><button className="ghost-button" onClick={() => openJobDetail(job.id)}>Task usage</button><button className="ghost-button" onClick={() => cloneJob(job)}>Clone</button><button className="ghost-button" onClick={() => resubmitJob(job)}>Resubmit</button><button className="ghost-button" onClick={() => shareJob(job)}>Share YAML</button>{job.status === 'Running' && <button className="ghost-button" onClick={() => onAction(job, 'stop')}>Stop</button>}{job.status === 'Queued' && <button className="ghost-button danger" onClick={() => onAction(job, 'cancel')}>Cancel</button>}{['Stopped', 'Failed', 'Canceled', 'Completed'].includes(job.status) && <button className="ghost-button" onClick={() => onAction(job, 'start')}>Start</button>}{job.status !== 'Queued' && <button className="ghost-button" onClick={() => onAction(job, 'restart')}>Restart</button>}</div></td></tr>)}</tbody></table></div>
+    {shareSpec && <ShareSpecDialog shareSpec={shareSpec} copyShareSpec={copyShareSpec} close={() => setShareSpec(null)} />}
   </section>;
+}
+
+function ShareSpecDialog({ shareSpec, copyShareSpec, close }) {
+  return <div className="modal-backdrop" role="presentation">
+    <section className="share-spec-dialog" role="dialog" aria-modal="true" aria-labelledby="share-spec-title">
+      <div className="section-header compact-header"><div><p className="eyebrow">Share launcher spec</p><h3 id="share-spec-title">{shareSpec.jobName}</h3><p>Copy this YAML into CLI submission, another Kuafu UI, or a review thread.</p></div><button className="icon-only" onClick={close} aria-label="Close share spec">×</button></div>
+      <textarea className="share-spec-textarea" readOnly value={shareSpec.yaml} rows="20" />
+      <div className="modal-actions"><button className="ghost-button" onClick={close}>Close</button><button className="primary-button" onClick={copyShareSpec}>{shareSpec.copied ? 'Copied' : 'Copy YAML'}</button></div>
+    </section>
+  </div>;
 }
 
 function PlanSummary({ form, templates, taskCount, taskGpuTotal }) {
@@ -230,96 +252,93 @@ function buildPreviewSpec(form, preview) {
 
 function toLauncherSpec(form) {
   return {
-    apiVersion: 'kuafu.ai/v1alpha1',
-    kind: 'LauncherJob',
-    metadata: { name: form.name || 'unnamed-job', project: form.project || undefined },
-    spec: {
-      queue: form.queue,
-      replicaPolicy: form.replicaPolicy || 'fixed',
-      workingDirectory: form.workingDirectory || '/workspace',
-      docker: { image: form.image, options: splitLines(form.dockerOptions) },
-      env: parseEnvLines(form.sharedEnv),
-      tasks: effectiveTaskTemplates(form).map((template) => ({ ...template, workingDirectory: template.workingDirectory || form.workingDirectory || '/workspace', dockerOptions: template.dockerOptions || splitLines(form.dockerOptions) })),
-    },
+    name: form.name || 'unnamed-job',
+    project: form.project || undefined,
+    queue: form.queue,
+    replicaPolicy: form.replicaPolicy || 'fixed',
+    workingDirectory: form.workingDirectory || '/workspace',
+    dependencies: [],
+    docker: { image: form.image, options: splitLines(form.dockerOptions) },
+    env: parseEnvLines(form.sharedEnv),
+    tasks: effectiveTaskTemplates(form).map((template) => ({ ...template, workingDirectory: template.workingDirectory || form.workingDirectory || '/workspace', dockerOptions: template.dockerOptions || splitLines(form.dockerOptions) })),
   };
 }
 
 function launcherSpecFromJob(job) {
   return {
-    apiVersion: 'kuafu.ai/v1alpha1',
-    kind: 'LauncherJob',
-    metadata: { name: job.name, project: job.project || undefined },
-    spec: {
-      queue: job.queue,
-      replicaPolicy: 'fixed',
-      workingDirectory: job.tasks?.[0]?.workingDirectory || '/workspace',
-      docker: { image: job.image, options: job.tasks?.[0]?.dockerOptions || [] },
-      env: job.sharedEnv || [],
-      tasks: (job.taskTemplates || []).length ? job.taskTemplates : [{ name: 'master', role: 'master', replicas: 1, image: job.image, command: job.command, gpuCount: job.gpuCount, cpuCount: 4, memoryGb: 16 }],
-    },
+    name: job.name,
+    project: job.project || undefined,
+    queue: job.queue,
+    replicaPolicy: 'fixed',
+    workingDirectory: job.tasks?.[0]?.workingDirectory || '/workspace',
+    dependencies: [],
+    docker: { image: job.image, options: job.tasks?.[0]?.dockerOptions || [] },
+    env: job.sharedEnv || [],
+    tasks: (job.taskTemplates || []).length ? job.taskTemplates : [{ name: 'master', role: 'master', replicas: 1, image: job.image, command: job.command, gpuCount: job.gpuCount, cpuCount: 4, memoryGb: 16 }],
   };
 }
 
 function renameLauncherSpec(spec, name) {
-  return { ...spec, metadata: { ...(spec.metadata || {}), name } };
+  return { ...spec, name, metadata: spec.metadata ? { ...spec.metadata, name } : undefined };
 }
 
 function formFromLauncherSpec(spec) {
-  const tasks = spec?.spec?.tasks?.length ? spec.spec.tasks : defaultDistributedTemplates(defaultCommand, defaultImage);
+  const normalized = normalizeLauncherSpec(spec);
+  const tasks = normalized.tasks?.length ? normalized.tasks : defaultDistributedTemplates(defaultCommand, defaultImage);
   const firstTask = tasks[0] || {};
   return {
-    name: spec?.metadata?.name || '',
-    queue: spec?.spec?.queue || 'default',
-    project: spec?.metadata?.project || '',
-    image: spec?.spec?.docker?.image || firstTask.image || defaultImage,
+    name: normalized.name || '',
+    queue: normalized.queue || 'default',
+    project: normalized.project || '',
+    image: normalized.docker?.image || firstTask.image || defaultImage,
     command: firstTask.command || defaultCommand,
     useSameCommand: tasks.every((task) => task.command === firstTask.command),
-    replicaPolicy: spec?.spec?.replicaPolicy || 'fixed',
-    workingDirectory: spec?.spec?.workingDirectory || firstTask.workingDirectory || '/workspace',
-    dockerOptions: (spec?.spec?.docker?.options || firstTask.dockerOptions || []).join('\n'),
-    sharedEnv: (spec?.spec?.env || []).map((item) => `${item.name}=${item.value || ''}`).join('\n'),
+    replicaPolicy: normalized.replicaPolicy || 'fixed',
+    workingDirectory: normalized.workingDirectory || firstTask.workingDirectory || '/workspace',
+    dockerOptions: (normalized.docker?.options || firstTask.dockerOptions || []).join('\n'),
+    sharedEnv: (normalized.env || []).map((item) => `${item.name}=${item.value || ''}`).join('\n'),
     taskTemplates: tasks,
   };
 }
 
 function launcherSpecToYaml(spec) {
-  const env = spec.spec.env || [];
-  const tasks = spec.spec.tasks || [];
+  spec = normalizeLauncherSpec(spec);
+  const env = spec.env || [];
+  const dependencies = spec.dependencies || [];
+  const tasks = spec.tasks || [];
   return [
-    `apiVersion: ${spec.apiVersion || 'kuafu.ai/v1alpha1'}`,
-    `kind: ${spec.kind || 'LauncherJob'}`,
-    'metadata:',
-    `  name: ${spec.metadata?.name || 'unnamed-job'}`,
-    spec.metadata?.project ? `  project: ${spec.metadata.project}` : '',
-    'spec:',
-    `  queue: ${spec.spec.queue || 'default'}`,
-    `  replicaPolicy: ${spec.spec.replicaPolicy || 'fixed'}`,
-    `  workingDirectory: ${spec.spec.workingDirectory || '/workspace'}`,
-    '  docker:',
-    `    image: ${spec.spec.docker?.image || defaultImage}`,
-    `    options: [${(spec.spec.docker?.options || []).join(', ')}]`,
-    '  env:',
-    ...(env.length ? env.map((item) => `    - ${item.name}: ${item.value || ''}`) : ['    []']),
-    '  tasks:',
+    `name: ${spec.name || 'unnamed-job'}`,
+    spec.project ? `project: ${spec.project}` : '',
+    `queue: ${spec.queue || 'default'}`,
+    `replicaPolicy: ${spec.replicaPolicy || 'fixed'}`,
+    `workingDirectory: ${spec.workingDirectory || '/workspace'}`,
+    'dependencies:',
+    ...(dependencies.length ? dependencies.map((item) => `  - ${item}`) : ['  []']),
+    'docker:',
+    `  image: ${spec.docker?.image || defaultImage}`,
+    `  options: [${(spec.docker?.options || []).join(', ')}]`,
+    'env:',
+    ...(env.length ? env.map((item) => `  - ${item.name}: ${item.value || ''}`) : ['  []']),
+    'tasks:',
     ...tasks.flatMap((task) => [
-      `    - name: ${task.name}`,
-      `      role: ${task.role}`,
-      `      replicas: ${task.replicas || 1}`,
-      task.minReplicas ? `      minReplicas: ${task.minReplicas}` : '',
-      task.maxReplicas ? `      maxReplicas: ${task.maxReplicas}` : '',
-      task.image ? `      image: ${task.image}` : '',
-      `      command: ${task.command || defaultCommand}`,
-      `      workingDirectory: ${task.workingDirectory || spec.spec.workingDirectory || '/workspace'}`,
-      `      dockerOptions: [${(task.dockerOptions || spec.spec.docker?.options || []).join(', ')}]`,
-      `      gpuCount: ${task.gpuCount || 0}`,
-      `      cpuCount: ${task.cpuCount || 0}`,
-      `      memoryGb: ${task.memoryGb || 0}`,
+      `  - name: ${task.name}`,
+      `    role: ${task.role}`,
+      `    replicas: ${task.replicas || 1}`,
+      task.minReplicas ? `    minReplicas: ${task.minReplicas}` : '',
+      task.maxReplicas ? `    maxReplicas: ${task.maxReplicas}` : '',
+      task.image ? `    image: ${task.image}` : '',
+      `    command: ${task.command || defaultCommand}`,
+      `    workingDirectory: ${task.workingDirectory || spec.workingDirectory || '/workspace'}`,
+      `    dockerOptions: [${(task.dockerOptions || spec.docker?.options || []).join(', ')}]`,
+      `    gpuCount: ${task.gpuCount || 0}`,
+      `    cpuCount: ${task.cpuCount || 0}`,
+      `    memoryGb: ${task.memoryGb || 0}`,
     ]),
   ].filter((line) => line !== '').join('\n');
 }
 
 function parseLauncherYaml(text) {
-  const spec = { apiVersion: 'kuafu.ai/v1alpha1', kind: 'LauncherJob', metadata: {}, spec: { docker: {}, env: [], tasks: [] } };
+  const spec = { replicaPolicy: 'fixed', docker: {}, env: [], dependencies: [], tasks: [] };
   let section = '';
   let nested = '';
   let currentTask = null;
@@ -331,45 +350,92 @@ function parseLauncherYaml(text) {
     const [key, value] = splitYamlPair(trimmed.replace(/^-\s+/, ''));
     if (indent === 0) {
       currentTask = null;
+      if (['name', 'project', 'queue', 'description', 'replicaPolicy', 'workingDirectory'].includes(key)) spec[key] = value;
       if (key === 'apiVersion') spec.apiVersion = value;
       if (key === 'kind') spec.kind = value;
-      if (key === 'metadata' || key === 'spec') { section = key; nested = ''; }
+      if (['metadata', 'spec', 'docker', 'env', 'dependencies', 'tasks'].includes(key)) { section = key; nested = ''; }
+      continue;
+    }
+    if (section === 'dependencies') {
+      if (trimmed.startsWith('- ')) spec.dependencies.push(key);
       continue;
     }
     if (section === 'metadata') {
-      if (key === 'name') spec.metadata.name = value;
-      if (key === 'project') spec.metadata.project = value;
+      if (key === 'name') spec.name = value;
+      if (key === 'project') spec.project = value;
+      continue;
+    }
+    if (section === 'docker') {
+      if (key === 'image') spec.docker.image = value;
+      if (key === 'options') spec.docker.options = parseYamlList(value);
+      continue;
+    }
+    if (section === 'env') {
+      if (trimmed.startsWith('- ')) spec.env.push({ name: key, value });
+      continue;
+    }
+    if (section === 'tasks') {
+      parseTaskLine(spec.tasks, { currentTaskRef: (next) => { currentTask = next; }, currentTask }, key, value, trimmed);
+      if (trimmed.startsWith('- ')) currentTask = spec.tasks.at(-1);
       continue;
     }
     if (section !== 'spec') continue;
     if (indent === 2 && ['docker', 'env', 'tasks'].includes(key)) { nested = key; continue; }
     if (!nested) {
-      if (key === 'queue') spec.spec.queue = value;
-      if (key === 'replicaPolicy') spec.spec.replicaPolicy = value;
-      if (key === 'workingDirectory') spec.spec.workingDirectory = value;
+      if (key === 'queue') spec.queue = value;
+      if (key === 'replicaPolicy') spec.replicaPolicy = value;
+      if (key === 'workingDirectory') spec.workingDirectory = value;
       continue;
     }
     if (nested === 'docker') {
-      if (key === 'image') spec.spec.docker.image = value;
-      if (key === 'options') spec.spec.docker.options = parseYamlList(value);
+      if (key === 'image') spec.docker.image = value;
+      if (key === 'options') spec.docker.options = parseYamlList(value);
       continue;
     }
     if (nested === 'env') {
-      if (trimmed.startsWith('- ')) spec.spec.env.push({ name: key, value });
+      if (trimmed.startsWith('- ')) spec.env.push({ name: key, value });
       continue;
     }
     if (nested === 'tasks') {
-      if (trimmed.startsWith('- ')) { currentTask = {}; spec.spec.tasks.push(currentTask); }
-      if (!currentTask) continue;
-      if (['replicas', 'minReplicas', 'maxReplicas', 'gpuCount', 'cpuCount', 'memoryGb'].includes(key)) currentTask[key] = Number(value) || 0;
-      else if (key === 'dockerOptions') currentTask.dockerOptions = parseYamlList(value);
-      else currentTask[key] = value;
+      parseTaskLine(spec.tasks, { currentTaskRef: (next) => { currentTask = next; }, currentTask }, key, value, trimmed);
+      if (trimmed.startsWith('- ')) currentTask = spec.tasks.at(-1);
     }
   }
-  if (!spec.metadata.name) throw new Error('launcher YAML must include metadata.name');
-  if (!spec.spec.queue) spec.spec.queue = 'default';
-  if (!spec.spec.tasks.length) throw new Error('launcher YAML must include spec.tasks');
+  if (!spec.name) throw new Error('launcher YAML must include name');
+  if (!spec.queue) spec.queue = 'default';
+  if (!spec.tasks.length) throw new Error('launcher YAML must include tasks');
   return spec;
+}
+
+function normalizeLauncherSpec(spec) {
+  if (!spec) return toLauncherSpec(emptyJobForm);
+  if (spec.spec || spec.metadata) {
+    return {
+      name: spec.name || spec.metadata?.name || 'unnamed-job',
+      project: spec.project || spec.metadata?.project || undefined,
+      queue: spec.queue || spec.spec?.queue || 'default',
+      replicaPolicy: spec.replicaPolicy || spec.spec?.replicaPolicy || 'fixed',
+      workingDirectory: spec.workingDirectory || spec.spec?.workingDirectory || '/workspace',
+      dependencies: spec.dependencies || spec.spec?.dependencies || [],
+      docker: spec.docker?.image ? spec.docker : (spec.spec?.docker || {}),
+      env: spec.env?.length ? spec.env : (spec.spec?.env || []),
+      tasks: spec.tasks?.length ? spec.tasks : (spec.spec?.tasks || []),
+    };
+  }
+  return spec;
+}
+
+function parseTaskLine(tasks, state, key, value, trimmed) {
+  let currentTask = state.currentTask;
+  if (trimmed.startsWith('- ')) {
+    currentTask = {};
+    tasks.push(currentTask);
+    state.currentTaskRef(currentTask);
+  }
+  if (!currentTask) return;
+  if (['replicas', 'minReplicas', 'maxReplicas', 'gpuCount', 'cpuCount', 'memoryGb'].includes(key)) currentTask[key] = Number(value) || 0;
+  else if (key === 'dockerOptions') currentTask.dockerOptions = parseYamlList(value);
+  else currentTask[key] = value;
 }
 
 function splitYamlPair(line) {
@@ -408,8 +474,8 @@ function totalTemplateCount(templates = []) {
 
 function defaultDistributedTemplates(command = defaultCommand, image = defaultImage) {
   return [
-    { name: 'master', role: 'master', replicas: 1, image, command, gpuCount: 1, cpuCount: 4, memoryGb: 16 },
-    { name: 'worker', role: 'worker', replicas: 1, image, command, gpuCount: 0, cpuCount: 2, memoryGb: 8 },
+    { name: 'master', role: 'master', replicas: 1, image, command: './a.out -p 0 --master $TASK0_ADDRESS --world-size $WORLD_SIZE', gpuCount: 1, cpuCount: 4, memoryGb: 16 },
+    { name: 'slave', role: 'slave', replicas: 1, image, command, gpuCount: 1, cpuCount: 4, memoryGb: 16 },
   ];
 }
 

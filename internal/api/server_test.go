@@ -350,19 +350,17 @@ func TestSubmitDistributedJobRendersTaskReservedEnv(t *testing.T) {
 func TestSubmitLauncherSpecRendersAndPersistsTaskPlan(t *testing.T) {
 	server := setupTestServer(t)
 	reqBody := domain.JobSubmitRequest{LauncherSpec: &domain.LauncherSpec{
-		APIVersion: "kuafu.ai/v1alpha1",
-		Kind:       "LauncherJob",
-		Metadata:   domain.LauncherMetadata{Name: "glm52-launcher", Project: "lab"},
-		Spec: domain.LauncherJobSpec{
-			Queue:            "training",
-			ReplicaPolicy:    "fixed",
-			WorkingDirectory: "/workspace/model",
-			Docker:           domain.LauncherDocker{Image: "lmsysorg/sglang:latest", Options: []string{"--network=host", "--ipc=host"}},
-			Env:              []domain.EnvVar{{Name: "MODEL_PATH", Value: "zai-org/GLM-5.2-FP8"}},
-			Tasks: []domain.TaskTemplate{
-				{Name: "master", Role: "master", Replicas: 1, Command: "sglang serve --model-path $MODEL_PATH --node-rank $RANK --dist-init-addr $TASK0_ADDRESS:$MASTER_PORT", GPUCount: 4, CPUCount: 32, MemoryGB: 256},
-				{Name: "worker", Role: "worker", Replicas: 1, Command: "sglang serve --model-path $MODEL_PATH --node-rank $RANK --dist-init-addr $TASK0_ADDRESS:$MASTER_PORT", GPUCount: 4, CPUCount: 32, MemoryGB: 256},
-			},
+		Name:             "mpi-aout",
+		Project:          "lab",
+		Queue:            "training",
+		ReplicaPolicy:    "fixed",
+		WorkingDirectory: "/workspace/mpi",
+		Dependencies:     []string{"dataset://imagenet-v1", "module://openmpi"},
+		Docker:           domain.LauncherDocker{Image: "mpi/openmpi:latest", Options: []string{"--network=host", "--ipc=host"}},
+		Env:              []domain.EnvVar{{Name: "OMPI_MCA_btl", Value: "tcp,self"}},
+		Tasks: []domain.TaskTemplate{
+			{Name: "master", Role: "master", Replicas: 1, Command: "./a.out -p 0 --master $TASK0_ADDRESS --world-size $WORLD_SIZE", GPUCount: 4, CPUCount: 32, MemoryGB: 256},
+			{Name: "slave", Role: "slave", Replicas: 1, Command: "./a.out -p $TASK_RANK --master $TASK0_ADDRESS --world-size $WORLD_SIZE", GPUCount: 4, CPUCount: 32, MemoryGB: 256},
 		},
 	}}
 	body, _ := json.Marshal(reqBody)
@@ -379,19 +377,19 @@ func TestSubmitLauncherSpecRendersAndPersistsTaskPlan(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&job); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
-	if job.Name != "glm52-launcher" || job.Queue != "training" || job.Image != "lmsysorg/sglang:latest" {
+	if job.Name != "mpi-aout" || job.Queue != "training" || job.Image != "mpi/openmpi:latest" {
 		t.Fatalf("launcher spec did not populate job fields: %#v", job)
 	}
-	if job.LauncherSpec == nil || job.LauncherSpec.Kind != "LauncherJob" || job.LauncherSpec.Spec.WorkingDirectory != "/workspace/model" {
+	if job.LauncherSpec == nil || job.LauncherSpec.WorkingDirectory != "/workspace/mpi" || len(job.LauncherSpec.Dependencies) != 2 {
 		t.Fatalf("launcher spec was not persisted: %#v", job.LauncherSpec)
 	}
 	if len(job.Tasks) != 2 || job.GPUCount != 8 {
 		t.Fatalf("expected two 4-GPU tasks and 8 total GPUs, got job=%d tasks=%#v", job.GPUCount, job.Tasks)
 	}
-	if job.Tasks[0].WorkingDirectory != "/workspace/model" || len(job.Tasks[0].DockerOptions) != 2 {
+	if job.Tasks[0].WorkingDirectory != "/workspace/mpi" || len(job.Tasks[0].DockerOptions) != 2 {
 		t.Fatalf("expected task launcher fields, got %#v", job.Tasks[0])
 	}
-	if !strings.Contains(job.Tasks[1].Command, "--node-rank 1") || !strings.Contains(job.Tasks[1].Command, "glm52-launcher-task-0:20000") {
+	if !strings.Contains(job.Tasks[0].Command, "./a.out -p 0") || !strings.Contains(job.Tasks[1].Command, "./a.out -p 1") || !strings.Contains(job.Tasks[1].Command, "mpi-aout-task-0") {
 		t.Fatalf("expected rendered worker launcher command, got %#v", job.Tasks[1].Command)
 	}
 }
