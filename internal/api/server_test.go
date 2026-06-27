@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/microsoft/kuafu/internal/auth"
 	"github.com/microsoft/kuafu/internal/domain"
@@ -178,6 +179,29 @@ func TestGPUTelemetryFallback(t *testing.T) {
 	}
 }
 
+func TestGPUTelemetryMergesLiveAndRepositoryInventory(t *testing.T) {
+	server := setupTestServer(t)
+	snapshot := &domain.GPUUsageSnapshot{
+		GeneratedAt: time.Now(),
+		Source:      "nvidia-smi",
+		GPUs:        []domain.GPUUsage{{Index: 0, NodeName: "A00", Name: "NVIDIA A100-SXM4-80GB", MemoryTotalMB: 81920, MemoryUsedMB: 1024, Utilization: 77}},
+	}
+	merged := mergeRepositoryTelemetry(server.repo, snapshot)
+	if merged.Source != "nvidia-smi+repository" {
+		t.Fatalf("expected merged source, got %s", merged.Source)
+	}
+	if len(merged.GPUs) != 16 {
+		t.Fatalf("expected all A00/A01 GPUs after merge, got %d", len(merged.GPUs))
+	}
+	foundA01 := false
+	for _, gpu := range merged.GPUs {
+		foundA01 = foundA01 || gpu.NodeName == "A01"
+	}
+	if !foundA01 {
+		t.Fatalf("expected A01 repository GPUs in merged telemetry: %#v", merged.GPUs)
+	}
+}
+
 func TestReservedEnvCatalog(t *testing.T) {
 	server := setupTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/reserved-env", nil)
@@ -320,6 +344,55 @@ func TestSubmitDistributedJobRendersTaskReservedEnv(t *testing.T) {
 	}
 	if !strings.Contains(job.Tasks[0].Command, "glm52-dist-task-0:20000") || !strings.Contains(job.Tasks[1].Command, "glm52-dist-task-0:20000") {
 		t.Fatalf("commands did not render shared master address: %#v", job.Tasks)
+	}
+}
+
+func TestSubmitLauncherSpecRendersAndPersistsTaskPlan(t *testing.T) {
+	server := setupTestServer(t)
+	reqBody := domain.JobSubmitRequest{LauncherSpec: &domain.LauncherSpec{
+		APIVersion: "kuafu.ai/v1alpha1",
+		Kind:       "LauncherJob",
+		Metadata:   domain.LauncherMetadata{Name: "glm52-launcher", Project: "lab"},
+		Spec: domain.LauncherJobSpec{
+			Queue:            "training",
+			ReplicaPolicy:    "fixed",
+			WorkingDirectory: "/workspace/model",
+			Docker:           domain.LauncherDocker{Image: "lmsysorg/sglang:latest", Options: []string{"--network=host", "--ipc=host"}},
+			Env:              []domain.EnvVar{{Name: "MODEL_PATH", Value: "zai-org/GLM-5.2-FP8"}},
+			Tasks: []domain.TaskTemplate{
+				{Name: "master", Role: "master", Replicas: 1, Command: "sglang serve --model-path $MODEL_PATH --node-rank $RANK --dist-init-addr $TASK0_ADDRESS:$MASTER_PORT", GPUCount: 4, CPUCount: 32, MemoryGB: 256},
+				{Name: "worker", Role: "worker", Replicas: 1, Command: "sglang serve --model-path $MODEL_PATH --node-rank $RANK --dist-init-addr $TASK0_ADDRESS:$MASTER_PORT", GPUCount: 4, CPUCount: 32, MemoryGB: 256},
+			},
+		},
+	}}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body))
+	req.Header.Set("x-kuafu-user", "lab-admin")
+	w := httptest.NewRecorder()
+
+	server.handleJobs(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("Expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var job domain.Job
+	if err := json.NewDecoder(w.Body).Decode(&job); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if job.Name != "glm52-launcher" || job.Queue != "training" || job.Image != "lmsysorg/sglang:latest" {
+		t.Fatalf("launcher spec did not populate job fields: %#v", job)
+	}
+	if job.LauncherSpec == nil || job.LauncherSpec.Kind != "LauncherJob" || job.LauncherSpec.Spec.WorkingDirectory != "/workspace/model" {
+		t.Fatalf("launcher spec was not persisted: %#v", job.LauncherSpec)
+	}
+	if len(job.Tasks) != 2 || job.GPUCount != 8 {
+		t.Fatalf("expected two 4-GPU tasks and 8 total GPUs, got job=%d tasks=%#v", job.GPUCount, job.Tasks)
+	}
+	if job.Tasks[0].WorkingDirectory != "/workspace/model" || len(job.Tasks[0].DockerOptions) != 2 {
+		t.Fatalf("expected task launcher fields, got %#v", job.Tasks[0])
+	}
+	if !strings.Contains(job.Tasks[1].Command, "--node-rank 1") || !strings.Contains(job.Tasks[1].Command, "glm52-launcher-task-0:20000") {
+		t.Fatalf("expected rendered worker launcher command, got %#v", job.Tasks[1].Command)
 	}
 }
 
@@ -803,12 +876,25 @@ func TestJobMetricsForRunningJob(t *testing.T) {
 	var response struct {
 		JobID string                   `json:"jobId"`
 		GPUs  []map[string]interface{} `json:"gpus"`
+		Tasks []map[string]interface{} `json:"tasks"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
 		t.Fatalf("Decode metrics failed: %v", err)
 	}
 	if response.JobID == "" || len(response.GPUs) == 0 {
 		t.Fatalf("expected job metrics with GPUs, got %#v", response)
+	}
+	if len(response.Tasks) == 0 {
+		t.Fatalf("expected task-level metrics, got %#v", response)
+	}
+	if _, ok := response.Tasks[0]["cpuUsage"]; !ok {
+		t.Fatalf("expected task cpuUsage metric, got %#v", response.Tasks[0])
+	}
+	if _, ok := response.Tasks[0]["memoryUsedMb"]; !ok {
+		t.Fatalf("expected task memoryUsedMb metric, got %#v", response.Tasks[0])
+	}
+	if _, ok := response.Tasks[0]["gpus"]; !ok {
+		t.Fatalf("expected task GPU metrics, got %#v", response.Tasks[0])
 	}
 }
 

@@ -10,7 +10,7 @@ export default function MonitoringView({ nodes, gpus, gpuTelemetry, jobs, reserv
   const memoryUsed = telemetryGpus.reduce((sum, gpu) => sum + (gpu.memoryUsedMb || 0), 0);
   const memoryTotal = telemetryGpus.reduce((sum, gpu) => sum + (gpu.memoryTotalMb || 0), 0);
   const processes = telemetryGpus.flatMap((gpu) => (gpu.processes || []).map((process) => ({ ...process, gpu })));
-  const taskRows = jobs.flatMap((job) => (job.tasks || []).map((task) => ({ job, task, telemetry: telemetryForTask(task, telemetryGpus) })));
+  const taskRows = jobs.flatMap((job) => taskListForJob(job).map((task) => ({ job, task, telemetry: telemetryForTask(task, telemetryGpus) })));
 
   return <section className="panel stack">
     <div className="section-header"><div><p className="eyebrow">Observability · refreshes every minute</p><h2>Monitoring</h2><p>GPU usage is read from live telemetry, so external workloads such as ComfyUI are visible even when Kuafu did not allocate the GPU.</p></div><StatusBadge status={gpuTelemetry?.source || 'unknown'} /></div>
@@ -45,4 +45,17 @@ function telemetryForTask(task, telemetryGpus) {
   const allocated = new Set(task.allocatedGpus || []);
   if (!allocated.size) return [];
   return telemetryGpus.filter((gpu) => allocated.has(gpu.id) || allocated.has(`${gpu.nodeName || 'A00'}-GPU-${gpu.index}`));
+}
+
+function taskListForJob(job) {
+  if ((job.tasks || []).length) return job.tasks;
+  return [{
+    id: `${job.id}-master-0`,
+    name: 'master-0',
+    role: 'master',
+    rank: 0,
+    allocatedGpus: job.allocatedGpus || [],
+    cpuCount: 4,
+    memoryGb: 16,
+  }];
 }

@@ -61,7 +61,7 @@ export async function loadJobDetail(jobId) {
     api(`/api/v1/jobs/${jobId}/logs`),
     api(`/api/v1/jobs/${jobId}/metrics`),
   ]);
-  return { job, logs: logs.logs || [], metrics: metrics.gpus || [], generatedAt: metrics.generatedAt };
+  return { job, logs: logs.logs || [], metrics: metrics.gpus || [], taskMetrics: metrics.tasks || [], generatedAt: metrics.generatedAt };
 }
 
 export function submitJob(payload) {

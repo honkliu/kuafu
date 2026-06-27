@@ -303,7 +303,7 @@ func submitJob(args []string) {
 	}
 
 	// Parse job submission arguments
-	var name, queue, command, image string
+	var name, queue, command, image, specPath string
 	var gpuCount int
 
 	for i := 0; i < len(args); i++ {
@@ -338,7 +338,22 @@ func submitJob(args []string) {
 				gpuCount = parsedGPUCount
 				i++
 			}
+		case "--spec", "-f":
+			if i+1 < len(args) {
+				specPath = args[i+1]
+				i++
+			}
 		}
+	}
+
+	if specPath != "" {
+		req, err := loadJobSubmitRequestFromSpec(specPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading spec: %v\n", err)
+			os.Exit(1)
+		}
+		submitJobRequest(req)
+		return
 	}
 
 	// Validate required fields
@@ -365,7 +380,10 @@ func submitJob(args []string) {
 		Image:    image,
 		GPUCount: gpuCount,
 	}
+	submitJobRequest(req)
+}
 
+func submitJobRequest(req domain.JobSubmitRequest) {
 	reqBody, err := json.Marshal(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error encoding job request: %v\n", err)
@@ -393,6 +411,167 @@ func submitJob(args []string) {
 	fmt.Printf("Status: %s\n", job.Status)
 	fmt.Printf("Queue: %s\n", job.Queue)
 	fmt.Printf("GPUs: %d\n", job.GPUCount)
+}
+
+func loadJobSubmitRequestFromSpec(path string) (domain.JobSubmitRequest, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return domain.JobSubmitRequest{}, err
+	}
+	var req domain.JobSubmitRequest
+	trimmed := strings.TrimSpace(string(content))
+	if strings.HasPrefix(trimmed, "{") {
+		if err := json.Unmarshal(content, &req); err != nil {
+			return domain.JobSubmitRequest{}, err
+		}
+		return req, nil
+	}
+	spec := parseLauncherYAML(trimmed)
+	return domain.JobSubmitRequest{LauncherSpec: &spec}, nil
+}
+
+func parseLauncherYAML(content string) domain.LauncherSpec {
+	spec := domain.LauncherSpec{APIVersion: "kuafu.ai/v1alpha1", Kind: "LauncherJob"}
+	section := ""
+	nested := ""
+	currentTask := -1
+	for _, rawLine := range strings.Split(content, "\n") {
+		line := strings.TrimRight(rawLine, " \t")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent == 0 {
+			currentTask = -1
+			key, value := splitYAMLPair(trimmed)
+			switch key {
+			case "apiVersion":
+				spec.APIVersion = value
+			case "kind":
+				spec.Kind = value
+			case "metadata", "spec":
+				section = key
+				nested = ""
+			}
+			continue
+		}
+		key, value := splitYAMLPair(strings.TrimPrefix(trimmed, "- "))
+		if section == "metadata" {
+			switch key {
+			case "name":
+				spec.Metadata.Name = value
+			case "project":
+				spec.Metadata.Project = value
+			}
+			continue
+		}
+		if section != "spec" {
+			continue
+		}
+		if indent == 2 && (trimmed == "docker:" || trimmed == "env:" || trimmed == "tasks:") {
+			nested = strings.TrimSuffix(trimmed, ":")
+			continue
+		}
+		if nested == "" {
+			switch key {
+			case "queue":
+				spec.Spec.Queue = value
+			case "replicaPolicy":
+				spec.Spec.ReplicaPolicy = value
+			case "workingDirectory":
+				spec.Spec.WorkingDirectory = value
+			}
+			continue
+		}
+		if nested == "docker" {
+			if key == "image" {
+				spec.Spec.Docker.Image = value
+			}
+			if key == "options" {
+				spec.Spec.Docker.Options = parseYAMLList(value)
+			}
+			continue
+		}
+		if nested == "env" {
+			if strings.HasPrefix(trimmed, "- ") {
+				spec.Spec.Env = append(spec.Spec.Env, domain.EnvVar{Name: key, Value: value})
+			}
+			continue
+		}
+		if nested == "tasks" {
+			if strings.HasPrefix(trimmed, "- ") {
+				spec.Spec.Tasks = append(spec.Spec.Tasks, domain.TaskTemplate{})
+				currentTask = len(spec.Spec.Tasks) - 1
+			}
+			if currentTask < 0 {
+				continue
+			}
+			task := &spec.Spec.Tasks[currentTask]
+			switch key {
+			case "name":
+				task.Name = value
+			case "role":
+				task.Role = value
+			case "replicas":
+				task.Replicas = atoiCLI(value)
+			case "minReplicas":
+				task.MinReplicas = atoiCLI(value)
+			case "maxReplicas":
+				task.MaxReplicas = atoiCLI(value)
+			case "image":
+				task.Image = value
+			case "command":
+				task.Command = value
+			case "workingDirectory":
+				task.WorkingDirectory = value
+			case "dockerOptions":
+				task.DockerOptions = parseYAMLList(value)
+			case "gpuCount":
+				task.GPUCount = atoiCLI(value)
+			case "cpuCount":
+				task.CPUCount = atoiCLI(value)
+			case "memoryGb":
+				task.MemoryGB = atoiCLI(value)
+			}
+		}
+	}
+	return spec
+}
+
+func splitYAMLPair(line string) (string, string) {
+	parts := strings.SplitN(line, ":", 2)
+	if len(parts) == 1 {
+		return strings.TrimSpace(parts[0]), ""
+	}
+	return strings.TrimSpace(parts[0]), unquoteYAML(strings.TrimSpace(parts[1]))
+}
+
+func parseYAMLList(value string) []string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(strings.TrimSuffix(value, "]"), "[")
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		items = append(items, unquoteYAML(strings.TrimSpace(part)))
+	}
+	return items
+}
+
+func unquoteYAML(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 && ((value[0] == '\'' && value[len(value)-1] == '\'') || (value[0] == '"' && value[len(value)-1] == '"')) {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
+func atoiCLI(value string) int {
+	parsed, _ := strconv.Atoi(strings.TrimSpace(value))
+	return parsed
 }
 
 func listJobs() {

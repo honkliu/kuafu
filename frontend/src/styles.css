@@ -913,6 +913,24 @@ button:disabled {
   margin-top: 10px;
 }
 
+.launcher-spec-panel {
+  border-color: #bfdbfe;
+}
+
+.launcher-yaml-editor {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  color: #e2e8f0;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  min-width: 0;
+  padding: 12px;
+  resize: vertical;
+  width: 100%;
+}
+
 .compact-header {
   margin-bottom: 0;
 }
@@ -1127,6 +1145,130 @@ button:disabled {
 .node-chip.active {
   border-color: var(--blue);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.task-usage-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+}
+
+.task-system-usage-section {
+  border-color: #bfdbfe;
+  box-shadow: 0 1px 0 rgba(37, 99, 235, 0.08);
+}
+
+.task-usage-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+}
+
+.task-usage-header,
+.resource-meter > div:first-child,
+.task-usage-meta {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.task-usage-header small,
+.resource-meter span,
+.task-usage-meta span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.task-resource-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+}
+
+.resource-meter {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.resource-meter strong {
+  color: var(--slate);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.task-usage-card code {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--slate);
+  display: block;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+  padding: 8px;
+}
+
+.task-history-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+}
+
+.task-history-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+}
+
+.task-history-card > div:first-child,
+.sparkline > div:first-child {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.sparkline {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sparkline span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.sparkline strong {
+  color: var(--slate);
+  font-size: 0.8rem;
+}
+
+.sparkline svg {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  height: 44px;
+  width: 100%;
+}
+
+.sparkline polyline {
+  fill: none;
+  stroke: var(--blue);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
 }
 
 .node-chip span {

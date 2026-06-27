@@ -77,6 +77,8 @@ func (s *Server) handleGPUTelemetry(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := collectNvidiaSMITelemetry()
 	if err != nil {
 		snapshot = fallbackRepositoryTelemetry(s.repo, err)
+	} else {
+		snapshot = mergeRepositoryTelemetry(s.repo, snapshot)
 	}
 	writeJSON(w, http.StatusOK, snapshot)
 }
@@ -181,6 +183,53 @@ func fallbackRepositoryTelemetry(repo repository.Repository, sourceErr error) *d
 		})
 	}
 	return &domain.GPUUsageSnapshot{GeneratedAt: time.Now(), Source: "repository", GPUs: usage, Error: sourceErr.Error()}
+}
+
+func mergeRepositoryTelemetry(repo repository.Repository, snapshot *domain.GPUUsageSnapshot) *domain.GPUUsageSnapshot {
+	gpus, err := repo.ListGPUs("")
+	if err != nil {
+		snapshot.Error = err.Error()
+		return snapshot
+	}
+	byNodeIndex := make(map[string]int, len(snapshot.GPUs))
+	for index, gpu := range snapshot.GPUs {
+		if gpu.NodeName == "" {
+			gpu.NodeName = "A00"
+			snapshot.GPUs[index].NodeName = gpu.NodeName
+		}
+		byNodeIndex[fmt.Sprintf("%s/%d", gpu.NodeName, gpu.Index)] = index
+	}
+	for _, gpu := range gpus {
+		key := fmt.Sprintf("%s/%d", gpu.NodeName, gpu.Index)
+		if index, ok := byNodeIndex[key]; ok {
+			if snapshot.GPUs[index].Name == "" {
+				snapshot.GPUs[index].Name = gpu.Model
+			}
+			if snapshot.GPUs[index].MemoryTotalMB == 0 {
+				snapshot.GPUs[index].MemoryTotalMB = gpu.MemoryMB
+			}
+			continue
+		}
+		snapshot.GPUs = append(snapshot.GPUs, domain.GPUUsage{
+			Index:         gpu.Index,
+			UUID:          gpu.UUID,
+			NodeName:      gpu.NodeName,
+			Name:          gpu.Model,
+			MemoryTotalMB: gpu.MemoryMB,
+			MemoryUsedMB:  0,
+			Utilization:   0,
+		})
+	}
+	sort.Slice(snapshot.GPUs, func(i, j int) bool {
+		if snapshot.GPUs[i].NodeName == snapshot.GPUs[j].NodeName {
+			return snapshot.GPUs[i].Index < snapshot.GPUs[j].Index
+		}
+		return snapshot.GPUs[i].NodeName < snapshot.GPUs[j].NodeName
+	})
+	if snapshot.Source == "nvidia-smi" {
+		snapshot.Source = "nvidia-smi+repository"
+	}
+	return snapshot
 }
 
 func atoiSafe(value string) int {
@@ -346,6 +395,7 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
+	req = requestFromLauncherSpec(req)
 
 	// Validate required fields
 	if req.Name == "" || req.Queue == "" || (req.Command == "" && len(req.TaskTemplates) == 0) {
@@ -399,6 +449,7 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 		GPUCount:    req.GPUCount,
 		Status:      domain.JobStatusQueued,
 		SubmittedAt: time.Now(),
+		LauncherSpec:  normalizeLauncherSpec(req),
 		TaskTemplates: normalizeTaskTemplates(req),
 		SharedEnv:     normalizeEnv(req.SharedEnv),
 		Logs:        []string{fmt.Sprintf("[%s] Job submitted to queue %s", time.Now().Format("15:04:05"), req.Queue)},
@@ -429,6 +480,81 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, job)
+}
+
+func requestFromLauncherSpec(req domain.JobSubmitRequest) domain.JobSubmitRequest {
+	if req.LauncherSpec == nil {
+		return req
+	}
+	spec := req.LauncherSpec
+	if req.Name == "" {
+		req.Name = strings.TrimSpace(spec.Metadata.Name)
+	}
+	if req.Project == "" {
+		req.Project = strings.TrimSpace(spec.Metadata.Project)
+	}
+	if req.Queue == "" {
+		req.Queue = strings.TrimSpace(spec.Spec.Queue)
+	}
+	if req.Image == "" {
+		req.Image = strings.TrimSpace(spec.Spec.Docker.Image)
+	}
+	if len(req.SharedEnv) == 0 {
+		req.SharedEnv = spec.Spec.Env
+	}
+	if len(req.TaskTemplates) == 0 {
+		req.TaskTemplates = spec.Spec.Tasks
+	}
+	if req.Command == "" && len(req.TaskTemplates) > 0 {
+		req.Command = req.TaskTemplates[0].Command
+	}
+	return req
+}
+
+func normalizeLauncherSpec(req domain.JobSubmitRequest) *domain.LauncherSpec {
+	if req.LauncherSpec != nil {
+		spec := *req.LauncherSpec
+		if spec.APIVersion == "" {
+			spec.APIVersion = "kuafu.ai/v1alpha1"
+		}
+		if spec.Kind == "" {
+			spec.Kind = "LauncherJob"
+		}
+		if spec.Metadata.Name == "" {
+			spec.Metadata.Name = req.Name
+		}
+		if spec.Metadata.Project == "" {
+			spec.Metadata.Project = req.Project
+		}
+		if spec.Spec.Queue == "" {
+			spec.Spec.Queue = req.Queue
+		}
+		if spec.Spec.Docker.Image == "" {
+			spec.Spec.Docker.Image = req.Image
+		}
+		if len(spec.Spec.Env) == 0 {
+			spec.Spec.Env = normalizeEnv(req.SharedEnv)
+		}
+		if len(spec.Spec.Tasks) == 0 {
+			spec.Spec.Tasks = normalizeTaskTemplates(req)
+		}
+		return &spec
+	}
+	return &domain.LauncherSpec{
+		APIVersion: "kuafu.ai/v1alpha1",
+		Kind:       "LauncherJob",
+		Metadata: domain.LauncherMetadata{
+			Name:    req.Name,
+			Project: req.Project,
+		},
+		Spec: domain.LauncherJobSpec{
+			Queue:         req.Queue,
+			ReplicaPolicy: "fixed",
+			Docker:        domain.LauncherDocker{Image: req.Image},
+			Env:           normalizeEnv(req.SharedEnv),
+			Tasks:         normalizeTaskTemplates(req),
+		},
+	}
 }
 
 func totalRequestedGPUs(req domain.JobSubmitRequest) int {
@@ -471,6 +597,12 @@ func normalizeTaskTemplates(req domain.JobSubmitRequest) []domain.TaskTemplate {
 			if template.Command == "" {
 				template.Command = req.Command
 			}
+			if template.WorkingDirectory == "" && req.LauncherSpec != nil {
+				template.WorkingDirectory = req.LauncherSpec.Spec.WorkingDirectory
+			}
+			if len(template.DockerOptions) == 0 && req.LauncherSpec != nil {
+				template.DockerOptions = append([]string{}, req.LauncherSpec.Spec.Docker.Options...)
+			}
 			if template.GPUCount < 0 {
 				template.GPUCount = 0
 			}
@@ -479,9 +611,15 @@ func normalizeTaskTemplates(req domain.JobSubmitRequest) []domain.TaskTemplate {
 		}
 		return templates
 	}
+	workingDirectory := ""
+	dockerOptions := []string(nil)
+	if req.LauncherSpec != nil {
+		workingDirectory = req.LauncherSpec.Spec.WorkingDirectory
+		dockerOptions = req.LauncherSpec.Spec.Docker.Options
+	}
 	return []domain.TaskTemplate{
-		{Name: "master", Role: "master", Replicas: 1, Image: req.Image, Command: req.Command, GPUCount: req.GPUCount},
-		{Name: "worker", Role: "worker", Replicas: 1, Image: req.Image, Command: req.Command, GPUCount: 0},
+		{Name: "master", Role: "master", Replicas: 1, Image: req.Image, Command: req.Command, WorkingDirectory: workingDirectory, DockerOptions: dockerOptions, GPUCount: req.GPUCount},
+		{Name: "worker", Role: "worker", Replicas: 1, Image: req.Image, Command: req.Command, WorkingDirectory: workingDirectory, DockerOptions: dockerOptions, GPUCount: 0},
 	}
 }
 
@@ -535,19 +673,21 @@ func renderTaskInstances(job *domain.Job) []domain.TaskInstance {
 			}
 			env := mergeTaskEnv(job.SharedEnv, template.Env, reservedTaskEnv(rank, ordinal, template.Role, worldSize, addresses))
 			tasks = append(tasks, domain.TaskInstance{
-				ID:       fmt.Sprintf("%s-task-%d", job.ID, rank),
-				Name:     fmt.Sprintf("%s-%d", template.Name, ordinal),
-				Role:     template.Role,
-				Rank:     rank,
-				Ordinal:  ordinal,
-				Address:  addresses[rank],
-				Image:    template.Image,
-				Command:  renderTemplateCommand(template.Command, env),
-				GPUCount: template.GPUCount,
-				CPUCount: template.CPUCount,
-				MemoryGB: template.MemoryGB,
-				Status:   job.Status,
-				Env:      env,
+				ID:               fmt.Sprintf("%s-task-%d", job.ID, rank),
+				Name:             fmt.Sprintf("%s-%d", template.Name, ordinal),
+				Role:             template.Role,
+				Rank:             rank,
+				Ordinal:          ordinal,
+				Address:          addresses[rank],
+				Image:            template.Image,
+				Command:          renderTemplateCommand(template.Command, env),
+				WorkingDirectory: template.WorkingDirectory,
+				DockerOptions:    append([]string{}, template.DockerOptions...),
+				GPUCount:         template.GPUCount,
+				CPUCount:         template.CPUCount,
+				MemoryGB:         template.MemoryGB,
+				Status:           job.Status,
+				Env:              env,
 			})
 			globalRank++
 		}
@@ -765,6 +905,7 @@ func (s *Server) getJobMetrics(w http.ResponseWriter, r *http.Request, jobID str
 	}
 
 	usage := make([]map[string]interface{}, 0, len(job.AllocatedGPUs))
+	usageByGPUID := make(map[string]map[string]interface{}, len(job.AllocatedGPUs))
 	for _, gpuID := range job.AllocatedGPUs {
 		gpu, exists := gpusByID[gpuID]
 		if !exists {
@@ -780,7 +921,7 @@ func (s *Server) getJobMetrics(w http.ResponseWriter, r *http.Request, jobID str
 			powerWatts = 250 + gpu.Index*7
 			temperatureC = 58 + gpu.Index%9
 		}
-		usage = append(usage, map[string]interface{}{
+		gpuUsage := map[string]interface{}{
 			"gpuId":         gpu.ID,
 			"nodeName":      gpu.NodeName,
 			"index":         gpu.Index,
@@ -791,15 +932,96 @@ func (s *Server) getJobMetrics(w http.ResponseWriter, r *http.Request, jobID str
 			"powerWatts":    powerWatts,
 			"temperatureC":  temperatureC,
 			"health":        "OK",
-		})
+		}
+		usage = append(usage, gpuUsage)
+		usageByGPUID[gpu.ID] = gpuUsage
 	}
+	taskUsage := buildTaskUsage(job, usageByGPUID)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"jobId":       job.ID,
 		"status":      job.Status,
 		"generatedAt": time.Now(),
 		"gpus":        usage,
+		"tasks":       taskUsage,
 	})
+}
+
+func buildTaskUsage(job *domain.Job, usageByGPUID map[string]map[string]interface{}) []map[string]interface{} {
+	tasks := job.Tasks
+	if len(tasks) == 0 {
+		tasks = []domain.TaskInstance{{
+			ID:            job.ID + "-master-0",
+			Name:          "master-0",
+			Role:          "master",
+			Rank:          0,
+			Command:       job.Command,
+			GPUCount:      job.GPUCount,
+			CPUCount:      4,
+			MemoryGB:      16,
+			AllocatedGPUs: job.AllocatedGPUs,
+			Status:        job.Status,
+		}}
+	}
+	result := make([]map[string]interface{}, 0, len(tasks))
+	for _, task := range tasks {
+		gpuUsage := make([]map[string]interface{}, 0, len(task.AllocatedGPUs))
+		gpuMemoryUsedMB := 0
+		gpuMemoryTotalMB := 0
+		gpuUtilizationTotal := 0
+		for _, gpuID := range task.AllocatedGPUs {
+			if usage, ok := usageByGPUID[gpuID]; ok {
+				gpuUsage = append(gpuUsage, usage)
+				gpuMemoryUsedMB += intFromInterface(usage["memoryUsedMb"])
+				gpuMemoryTotalMB += intFromInterface(usage["memoryTotalMb"])
+				gpuUtilizationTotal += intFromInterface(usage["utilization"])
+			}
+		}
+		avgGPUUtilization := 0
+		if len(gpuUsage) > 0 {
+			avgGPUUtilization = gpuUtilizationTotal / len(gpuUsage)
+		}
+		cpuUsage := task.CPUUsage
+		if cpuUsage == 0 && job.Status == domain.JobStatusRunning {
+			cpuUsage = 18 + (task.Rank*7)%40
+		}
+		memoryUsedMB := task.MemoryUsedMB
+		if memoryUsedMB == 0 && job.Status == domain.JobStatusRunning && task.MemoryGB > 0 {
+			memoryUsedMB = task.MemoryGB * 1024 * (28 + (task.Rank*5)%25) / 100
+		}
+		result = append(result, map[string]interface{}{
+			"id":                task.ID,
+			"name":              task.Name,
+			"role":              task.Role,
+			"rank":              task.Rank,
+			"status":            task.Status,
+			"cpuRequested":      task.CPUCount,
+			"cpuUsage":          cpuUsage,
+			"memoryRequestedMb": task.MemoryGB * 1024,
+			"memoryUsedMb":      memoryUsedMB,
+			"gpuRequested":      task.GPUCount,
+			"allocatedGpus":     task.AllocatedGPUs,
+			"gpuUtilization":    avgGPUUtilization,
+			"gpuMemoryUsedMb":   gpuMemoryUsedMB,
+			"gpuMemoryTotalMb":  gpuMemoryTotalMB,
+			"gpus":              gpuUsage,
+			"command":           task.Command,
+		})
+	}
+	return result
+}
+
+func intFromInterface(value interface{}) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
 }
 
 func (s *Server) handleReservations(w http.ResponseWriter, r *http.Request) {
