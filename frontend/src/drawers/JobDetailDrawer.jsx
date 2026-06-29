@@ -10,19 +10,49 @@ export default function JobDetailDrawer({ detail, close, allGpus }) {
       <button className="icon-only" onClick={close}><X size={20} /></button>
     </div>
     {!detail ? <div className="loading-line">Loading runtime details...</div> : <div className="stack task-usage-stack">
+      <section className="drawer-section job-output-detail"><h3>Output</h3><TaskOutput logs={detail.logs} /></section>
       <TaskSystemUsage tasks={detail.taskMetrics || []} />
       <section className="drawer-section detail-grid">
         <div><h3>Summary</h3><KeyValue label="Job ID" value={detail.job.id} /><KeyValue label="Status" value={<StatusBadge status={detail.job.status} />} /><KeyValue label="Queue" value={detail.job.queue} /><KeyValue label="Submitted" value={formatDate(detail.job.submittedAt)} /><KeyValue label="Started" value={formatDate(detail.job.startedAt)} /></div>
-        <div><h3>Exact runtime command</h3><CodeBlock value={renderJobDockerCommand(detail.job)} /></div>
+        <div><h3>Exact Docker launch</h3><CodeBlock value={renderJobDockerCommand(detail.job)} /></div>
       </section>
       <TaskPlan job={detail.job} />
       <section className="drawer-section"><h3>GPU usage</h3><div className="usage-grid">{detail.metrics.length === 0 ? <p className="muted-text">No GPU metrics for this job.</p> : detail.metrics.map((gpu) => <GpuUsageCard key={gpu.gpuId} gpu={gpu} />)}</div></section>
       <TaskHistory tasks={detail.taskMetrics || []} />
       <section className="drawer-section"><h3>Launcher spec</h3><CodeBlock value={launcherSpecToYaml(detail.job.launcherSpec || launcherSpecFromJob(detail.job))} /></section>
-      <section className="drawer-section"><h3>Submitted spec</h3><KeyValue label="Image" value={detail.job.image || '-'} /><KeyValue label="Command" value={detail.job.command} /><KeyValue label="Allocated GPUs" value={(detail.job.allocatedGpus || []).join(', ') || '-'} /><KeyValue label="Allocated nodes" value={nodesForGPUIds(detail.job.allocatedGpus || [], allGpus).join(', ') || '-'} /></section>
-      <section className="drawer-section"><h3>Logs</h3><CodeBlock value={detail.logs.join('\n')} /></section>
+      <section className="drawer-section"><h3>Submitted spec</h3><KeyValue label="Image" value={detail.job.image || '-'} /><KeyValue label="Entrypoint" value={detail.job.entrypointScript || '-'} /><KeyValue label="Task script" value={detail.job.command} /><KeyValue label="Allocated GPUs" value={(detail.job.allocatedGpus || []).join(', ') || '-'} /><KeyValue label="Allocated nodes" value={nodesForGPUIds(detail.job.allocatedGpus || [], allGpus).join(', ') || '-'} /></section>
     </div>}
   </aside>;
+}
+
+function TaskOutput({ logs }) {
+  const parsed = parseJobOutput(logs || []);
+  return <div className="stack">{parsed.tasks.length ? <div className="task-output-grid">{parsed.tasks.map((task) => <article className="task-output-card" key={task.name}><div><strong>{task.name}</strong><StatusBadge status={task.status || 'Output'} /></div>{task.stdout.length > 0 && <div><span>stdout</span><CodeBlock value={task.stdout.join('\n')} /></div>}{task.stderr.length > 0 && <div><span>stderr</span><CodeBlock value={task.stderr.join('\n')} /></div>}</article>)}</div> : <CodeBlock value="No stdout or stderr yet." />}<details className="json-details"><summary>Diagnostics</summary><CodeBlock value={logs.length ? logs.join('\n') : 'No diagnostic logs yet.'} /></details></div>;
+}
+
+function parseJobOutput(logs) {
+  const byTask = new Map();
+  const taskFor = (name) => {
+    if (!byTask.has(name)) byTask.set(name, { name, stdout: [], stderr: [], status: '' });
+    return byTask.get(name);
+  };
+  for (const line of logs || []) {
+    const stdout = line.match(/Task ([^ ]+) stdout: ?(.*)$/);
+    if (stdout) {
+      taskFor(stdout[1]).stdout.push(stdout[2]);
+      continue;
+    }
+    const stderr = line.match(/Task ([^ ]+) stderr: ?(.*)$/);
+    if (stderr) {
+      taskFor(stderr[1]).stderr.push(stderr[2]);
+      continue;
+    }
+    const complete = line.match(/Task ([^ ]+) completed successfully/);
+    if (complete) taskFor(complete[1]).status = 'Completed';
+    const failed = line.match(/Task ([^ ]+) failed/);
+    if (failed) taskFor(failed[1]).status = 'Failed';
+  }
+  return { tasks: [...byTask.values()] };
 }
 
 function TaskSystemUsage({ tasks }) {
@@ -33,7 +63,7 @@ function TaskSystemUsage({ tasks }) {
 }
 
 function TaskPlan({ job }) {
-  return <section className="drawer-section"><h3>Task plan</h3><div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>Task</th><th>Role</th><th>Rank</th><th>GPU</th><th>CPU / Memory</th><th>Command</th></tr></thead><tbody>{(job.tasks || []).length === 0 ? <tr><td colSpan="6">This job was normalized into a master task for metrics.</td></tr> : job.tasks.map((task) => <tr key={task.id}><td>{task.name}<small>{task.status}</small></td><td><StatusBadge status={task.role} /></td><td>{task.rank}</td><td>{(task.allocatedGpus || []).join(', ') || '-'}</td><td>{task.cpuCount || 0} CPU / {task.memoryGb || 0} GB</td><td className="truncate-cell">{task.command}</td></tr>)}</tbody></table></div></section>;
+  return <section className="drawer-section"><h3>Task plan</h3><div className="table-wrap"><table className="data-table compact-table"><thead><tr><th>Task</th><th>Role</th><th>Rank</th><th>GPU</th><th>CPU / Memory</th><th>Docker options</th><th>Script</th></tr></thead><tbody>{(job.tasks || []).length === 0 ? <tr><td colSpan="7">This job was normalized into a master task for metrics.</td></tr> : job.tasks.map((task) => <tr key={task.id}><td>{task.name}<small>{task.status}</small></td><td><StatusBadge status={task.role} /></td><td>{task.rank}</td><td>{(task.allocatedGpus || []).join(', ') || '-'}</td><td>{task.cpuCount || 0} CPU / {task.memoryGb || 0} GB</td><td className="truncate-cell">{(task.dockerOptions || []).join(' ') || '-'}</td><td className="truncate-cell script-cell">{task.command}</td></tr>)}</tbody></table></div><div className="docker-preview-grid">{(job.tasks || []).map((task) => <CodeBlock key={`${task.id}-docker`} value={renderDockerLaunchCommand(task, job)} />)}</div></section>;
 }
 
 function TaskUsageCard({ task }) {
@@ -66,7 +96,24 @@ function taskNodeLabel(task) {
   const nodes = Array.from(new Set((task.gpus || []).map((gpu) => gpu.nodeName).filter(Boolean)));
   if (nodes.length) return nodes.join(', ');
   const firstGpu = (task.allocatedGpus || [])[0];
-  return firstGpu?.split('-GPU-')[0] || 'pending';
+  return firstGpu?.split('-GPU-')[0] || 'placement unavailable';
+}
+
+function renderDockerLaunchCommand(task, job) {
+  const parts = ['docker run --rm', '--name', shellQuote(`kuafu-${task.name || job.id}`)];
+  const options = task.dockerOptions || job.launcherSpec?.docker?.options || [];
+  if (options.length) parts.push(options.join(' '));
+  if (task.workingDirectory) parts.push('-w', shellQuote(task.workingDirectory));
+  for (const item of task.env || []) {
+    parts.push('-e', shellQuote(`${item.name}=${item.value}`));
+  }
+  parts.push(shellQuote(task.image || job.image || 'debian:bookworm-slim'), '/bin/bash', '-lc', shellQuote(['set -e', task.entrypointScript || job.entrypointScript, task.command || job.command || ''].filter((part) => String(part || '').trim()).join('\n')));
+  return parts.join(' ');
+}
+
+function shellQuote(value) {
+  const text = String(value || '');
+  return `'${text.replaceAll("'", "'\\''")}'`;
 }
 
 function ResourceMeter({ label, value, detail }) {
@@ -87,6 +134,7 @@ function launcherSpecFromJob(job) {
     queue: job.queue,
     replicaPolicy: 'fixed',
     workingDirectory: job.tasks?.[0]?.workingDirectory || '/workspace',
+    entrypointScript: job.entrypointScript || job.launcherSpec?.entrypointScript || job.tasks?.[0]?.entrypointScript || '',
     dependencies: [],
     docker: { image: job.image, options: job.tasks?.[0]?.dockerOptions || [] },
     env: job.sharedEnv || [],
@@ -99,7 +147,7 @@ function launcherSpecToYaml(spec) {
   const env = spec.env || [];
   const dependencies = spec.dependencies || [];
   const tasks = spec.tasks || [];
-  return [`name: ${spec.name || 'unnamed-job'}`, spec.project ? `project: ${spec.project}` : '', `queue: ${spec.queue || 'default'}`, `replicaPolicy: ${spec.replicaPolicy || 'fixed'}`, `workingDirectory: ${spec.workingDirectory || '/workspace'}`, 'dependencies:', ...(dependencies.length ? dependencies.map((item) => `  - ${item}`) : ['  []']), 'docker:', `  image: ${spec.docker?.image || ''}`, `  options: [${(spec.docker?.options || []).join(', ')}]`, 'env:', ...(env.length ? env.map((item) => `  - ${item.name}: ${item.value || ''}`) : ['  []']), 'tasks:', ...tasks.flatMap((task) => [`  - name: ${task.name}`, `    role: ${task.role}`, `    replicas: ${task.replicas || 1}`, task.image ? `    image: ${task.image}` : '', `    command: ${task.command || ''}`, `    workingDirectory: ${task.workingDirectory || spec.workingDirectory || '/workspace'}`, `    dockerOptions: [${(task.dockerOptions || spec.docker?.options || []).join(', ')}]`, `    gpuCount: ${task.gpuCount || 0}`, `    cpuCount: ${task.cpuCount || 0}`, `    memoryGb: ${task.memoryGb || 0}`])].filter((line) => line !== '').join('\n');
+  return [`name: ${spec.name || 'unnamed-job'}`, spec.project ? `project: ${spec.project}` : '', `queue: ${spec.queue || 'default'}`, `replicaPolicy: ${spec.replicaPolicy || 'fixed'}`, `workingDirectory: ${spec.workingDirectory || '/workspace'}`, spec.entrypointScript ? `entrypointScript: ${spec.entrypointScript}` : '', 'dependencies:', ...(dependencies.length ? dependencies.map((item) => `  - ${item}`) : ['  []']), 'docker:', `  image: ${spec.docker?.image || ''}`, `  options: [${(spec.docker?.options || []).join(', ')}]`, 'env:', ...(env.length ? env.map((item) => `  - ${item.name}: ${item.value || ''}`) : ['  []']), 'tasks:', ...tasks.flatMap((task) => [`  - name: ${task.name}`, `    role: ${task.role}`, `    replicas: ${task.replicas || 1}`, task.image ? `    image: ${task.image}` : '', `    command: ${task.command || ''}`, `    workingDirectory: ${task.workingDirectory || spec.workingDirectory || '/workspace'}`, `    dockerOptions: [${(task.dockerOptions || spec.docker?.options || []).join(', ')}]`, `    gpuCount: ${task.gpuCount || 0}`, `    cpuCount: ${task.cpuCount || 0}`, `    memoryGb: ${task.memoryGb || 0}`])].filter((line) => line !== '').join('\n');
 }
 
 function normalizeLauncherSpec(spec) {
@@ -110,6 +158,7 @@ function normalizeLauncherSpec(spec) {
       queue: spec.queue || spec.spec?.queue || 'default',
       replicaPolicy: spec.replicaPolicy || spec.spec?.replicaPolicy || 'fixed',
       workingDirectory: spec.workingDirectory || spec.spec?.workingDirectory || '/workspace',
+      entrypointScript: spec.entrypointScript || spec.spec?.entrypointScript || '',
       dependencies: spec.dependencies || spec.spec?.dependencies || [],
       docker: spec.docker?.image ? spec.docker : (spec.spec?.docker || {}),
       env: spec.env?.length ? spec.env : (spec.spec?.env || []),

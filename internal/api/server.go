@@ -55,9 +55,12 @@ func NewServer(repo repository.Repository, sched *scheduler.Scheduler, addr stri
 	mux.HandleFunc("/api/v1/reservations/", s.handleReservationDetail)
 	mux.HandleFunc("/api/v1/cluster/summary", s.handleClusterSummary)
 
-	// Serve static files from web/ directory
+	// Serve static files from web/ directory. Keep the console uncached during rapid UI iteration.
 	fs := http.FileServer(http.Dir("./web"))
-	mux.Handle("/", fs)
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		fs.ServeHTTP(w, r)
+	}))
 
 	s.server = &http.Server{
 		Addr:         addr,
@@ -445,6 +448,7 @@ func (s *Server) submitJob(w http.ResponseWriter, r *http.Request) {
 		Project:     req.Project,
 		Queue:       req.Queue,
 		Command:     req.Command,
+		EntrypointScript: req.EntrypointScript,
 		Image:       req.Image,
 		GPUCount:    req.GPUCount,
 		Status:      domain.JobStatusQueued,
@@ -500,6 +504,9 @@ func requestFromLauncherSpec(req domain.JobSubmitRequest) domain.JobSubmitReques
 	if req.Image == "" {
 		req.Image = strings.TrimSpace(spec.Docker.Image)
 	}
+	if req.EntrypointScript == "" {
+		req.EntrypointScript = strings.TrimSpace(spec.EntrypointScript)
+	}
 	if len(req.SharedEnv) == 0 {
 		req.SharedEnv = spec.Env
 	}
@@ -527,6 +534,9 @@ func normalizeJobCentricSpec(spec domain.LauncherSpec) domain.LauncherSpec {
 	}
 	if spec.WorkingDirectory == "" {
 		spec.WorkingDirectory = spec.Spec.WorkingDirectory
+	}
+	if spec.EntrypointScript == "" {
+		spec.EntrypointScript = spec.Spec.EntrypointScript
 	}
 	if spec.Docker.Image == "" && spec.Spec.Docker.Image != "" {
 		spec.Docker = spec.Spec.Docker
@@ -558,6 +568,9 @@ func normalizeLauncherSpec(req domain.JobSubmitRequest) *domain.LauncherSpec {
 		if spec.Docker.Image == "" {
 			spec.Docker.Image = req.Image
 		}
+		if spec.EntrypointScript == "" {
+			spec.EntrypointScript = req.EntrypointScript
+		}
 		if len(spec.Env) == 0 {
 			spec.Env = normalizeEnv(req.SharedEnv)
 		}
@@ -571,6 +584,7 @@ func normalizeLauncherSpec(req domain.JobSubmitRequest) *domain.LauncherSpec {
 		Project:       req.Project,
 		Queue:         req.Queue,
 		ReplicaPolicy: "fixed",
+		EntrypointScript: req.EntrypointScript,
 		Docker:        domain.LauncherDocker{Image: req.Image},
 		Env:           normalizeEnv(req.SharedEnv),
 		Tasks:         normalizeTaskTemplates(req),
@@ -617,6 +631,9 @@ func normalizeTaskTemplates(req domain.JobSubmitRequest) []domain.TaskTemplate {
 			if template.Command == "" {
 				template.Command = req.Command
 			}
+			if template.EntrypointScript == "" {
+				template.EntrypointScript = req.EntrypointScript
+			}
 			if template.WorkingDirectory == "" && req.LauncherSpec != nil {
 				template.WorkingDirectory = req.LauncherSpec.WorkingDirectory
 			}
@@ -638,8 +655,8 @@ func normalizeTaskTemplates(req domain.JobSubmitRequest) []domain.TaskTemplate {
 		dockerOptions = req.LauncherSpec.Docker.Options
 	}
 	return []domain.TaskTemplate{
-		{Name: "master", Role: "master", Replicas: 1, Image: req.Image, Command: req.Command, WorkingDirectory: workingDirectory, DockerOptions: dockerOptions, GPUCount: req.GPUCount},
-		{Name: "worker", Role: "worker", Replicas: 1, Image: req.Image, Command: req.Command, WorkingDirectory: workingDirectory, DockerOptions: dockerOptions, GPUCount: 0},
+		{Name: "master", Role: "master", Replicas: 1, Image: req.Image, Command: req.Command, EntrypointScript: req.EntrypointScript, WorkingDirectory: workingDirectory, DockerOptions: dockerOptions, GPUCount: req.GPUCount},
+		{Name: "worker", Role: "worker", Replicas: 1, Image: req.Image, Command: req.Command, EntrypointScript: req.EntrypointScript, WorkingDirectory: workingDirectory, DockerOptions: dockerOptions, GPUCount: 0},
 	}
 }
 
@@ -701,6 +718,7 @@ func renderTaskInstances(job *domain.Job) []domain.TaskInstance {
 				Address:          addresses[rank],
 				Image:            template.Image,
 				Command:          renderTemplateCommand(template.Command, env),
+				EntrypointScript: renderTemplateCommand(template.EntrypointScript, env),
 				WorkingDirectory: template.WorkingDirectory,
 				DockerOptions:    append([]string{}, template.DockerOptions...),
 				GPUCount:         template.GPUCount,
@@ -726,6 +744,9 @@ func applyReviewedTasks(tasks []domain.TaskInstance, reviewed []domain.TaskInsta
 	for index := range tasks {
 		if reviewedTask, ok := byRank[tasks[index].Rank]; ok && strings.TrimSpace(reviewedTask.Command) != "" {
 			tasks[index].Command = reviewedTask.Command
+			if strings.TrimSpace(reviewedTask.EntrypointScript) != "" {
+				tasks[index].EntrypointScript = reviewedTask.EntrypointScript
+			}
 		}
 	}
 }
@@ -788,6 +809,9 @@ func mergeTaskEnv(groups ...[]domain.EnvVar) []domain.EnvVar {
 
 func renderTemplateCommand(command string, env []domain.EnvVar) string {
 	for _, item := range env {
+		if !isReservedEnvName(item.Name) {
+			continue
+		}
 		command = strings.ReplaceAll(command, "$"+item.Name, item.Value)
 		command = strings.ReplaceAll(command, "${"+item.Name+"}", item.Value)
 	}

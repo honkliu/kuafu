@@ -355,9 +355,10 @@ func TestSubmitLauncherSpecRendersAndPersistsTaskPlan(t *testing.T) {
 		Queue:            "training",
 		ReplicaPolicy:    "fixed",
 		WorkingDirectory: "/workspace/mpi",
+		EntrypointScript: "export MODEL_PATH=$MODEL_PATH\nexport MASTER=$TASK0_ADDRESS",
 		Dependencies:     []string{"dataset://imagenet-v1", "module://openmpi"},
 		Docker:           domain.LauncherDocker{Image: "mpi/openmpi:latest", Options: []string{"--network=host", "--ipc=host"}},
-		Env:              []domain.EnvVar{{Name: "OMPI_MCA_btl", Value: "tcp,self"}},
+		Env:              []domain.EnvVar{{Name: "OMPI_MCA_btl", Value: "tcp,self"}, {Name: "MODEL_PATH", Value: "/models/glm"}},
 		Tasks: []domain.TaskTemplate{
 			{Name: "master", Role: "master", Replicas: 1, Command: "./a.out -p 0 --master $TASK0_ADDRESS --world-size $WORLD_SIZE", GPUCount: 4, CPUCount: 32, MemoryGB: 256},
 			{Name: "slave", Role: "slave", Replicas: 1, Command: "./a.out -p $TASK_RANK --master $TASK0_ADDRESS --world-size $WORLD_SIZE", GPUCount: 4, CPUCount: 32, MemoryGB: 256},
@@ -391,6 +392,46 @@ func TestSubmitLauncherSpecRendersAndPersistsTaskPlan(t *testing.T) {
 	}
 	if !strings.Contains(job.Tasks[0].Command, "./a.out -p 0") || !strings.Contains(job.Tasks[1].Command, "./a.out -p 1") || !strings.Contains(job.Tasks[1].Command, "mpi-aout-task-0") {
 		t.Fatalf("expected rendered worker launcher command, got %#v", job.Tasks[1].Command)
+	}
+	if !strings.Contains(job.Tasks[0].EntrypointScript, "export MODEL_PATH=$MODEL_PATH") || !strings.Contains(job.Tasks[0].EntrypointScript, "export MASTER=mpi-aout-task-0") {
+		t.Fatalf("expected rendered entrypoint setup before task, got %#v", job.Tasks[0].EntrypointScript)
+	}
+	if strings.Contains(job.Tasks[0].Command, "MODEL_PATH") || strings.Contains(job.Tasks[0].Command, "export MASTER") {
+		t.Fatalf("entrypoint leaked into task script: %#v", job.Tasks[0].Command)
+	}
+}
+
+func TestSubmitSingleNodeSGLangLauncherCommand(t *testing.T) {
+	server := setupTestServer(t)
+	command := "python -m sglang.launch_server --model-path /mnt/nvme_raid0/Qwen3-Next-80B-A3B-Instruct --tp-size 8 --mem-fraction-static 0.8 --context-length 262144 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --host 0.0.0.0 --api-key san+3dy9 --port 8000 > /mnt/nvme_raid0/gitroot/qwen80b.log 2>&1 &"
+	reqBody := domain.JobSubmitRequest{LauncherSpec: &domain.LauncherSpec{
+		Name:             "qwen80b-sglang",
+		Queue:            "default",
+		ReplicaPolicy:    "fixed",
+		WorkingDirectory: "/mnt/nvme_raid0/gitroot",
+		Docker:           domain.LauncherDocker{Image: "lmsysorg/sglang:latest", Options: []string{"--gpus all", "--network=host", "--ipc=host", "--shm-size=32g", "-v /mnt/nvme_raid0:/mnt/nvme_raid0"}},
+		Tasks: []domain.TaskTemplate{
+			{Name: "server", Role: "server", Replicas: 1, Command: command, GPUCount: 8, CPUCount: 32, MemoryGB: 256},
+		},
+	}}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleJobs(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("Expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var job domain.Job
+	if err := json.NewDecoder(w.Body).Decode(&job); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if len(job.Tasks) != 1 || job.Tasks[0].Command != command {
+		t.Fatalf("expected exact sglang command to be preserved, got %#v", job.Tasks)
+	}
+	if job.GPUCount != 8 || job.Tasks[0].GPUCount != 8 {
+		t.Fatalf("expected single 8-GPU server task, got job=%d task=%d", job.GPUCount, job.Tasks[0].GPUCount)
 	}
 }
 

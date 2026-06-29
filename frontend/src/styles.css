@@ -498,6 +498,11 @@ button:disabled {
   font-family: 'Courier New', Courier, monospace;
   font-size: 0.82rem;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.output-action-button {
+  padding: 8px 11px;
 }
 
 .gpu-chip-row {
@@ -706,6 +711,14 @@ button:disabled {
   padding: 14px;
 }
 
+details.command-preview-panel:not([open]) > :not(summary) {
+  display: none;
+}
+
+details:not([open]) > :not(summary) {
+  display: none !important;
+}
+
 .workflow-shell {
   background: linear-gradient(180deg, #f8fafc, #eef6ff);
   border: 1px solid var(--line);
@@ -821,6 +834,220 @@ button:disabled {
   min-width: 0;
 }
 
+.job-launcher-shell {
+  align-items: start;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  padding: 14px;
+}
+
+.job-intent-form {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px;
+}
+
+.launcher-step-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.launcher-step-header > span {
+  align-items: center;
+  background: var(--blue);
+  border-radius: 999px;
+  color: white;
+  display: inline-flex;
+  font-weight: 900;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.launcher-step-header h3 {
+  margin: 0;
+}
+
+.launcher-form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+}
+
+.launcher-form-grid label,
+.launcher-form-grid input,
+.launcher-form-grid select,
+.launcher-form-grid textarea,
+.job-output-panel select {
+  min-width: 0;
+  width: 100%;
+}
+
+.launcher-form-grid label {
+  color: var(--slate);
+  display: grid;
+  font-size: 0.82rem;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.launcher-form-grid input,
+.launcher-form-grid select,
+.launcher-form-grid textarea,
+.job-output-panel select {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 11px;
+}
+
+.launcher-form-grid .full-span,
+.launcher-form-grid .double-span,
+.job-intent-form .form-submit-button {
+  grid-column: 1 / -1;
+}
+
+.launcher-form-grid .checkbox-label {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.launcher-form-grid .checkbox-label input {
+  width: auto;
+}
+
+.script-editor-label textarea {
+  background: #0f172a;
+  border-color: #1e293b;
+  color: #e2e8f0;
+  line-height: 1.5;
+  min-height: 220px;
+}
+
+.script-editor-label {
+  margin-bottom: 8px;
+}
+
+.job-intent-form .form-submit-button {
+  margin-top: 8px;
+}
+
+.launcher-review-rail {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.task-layout-panel {
+  background: white;
+}
+
+.compact-task-template {
+  align-content: start;
+}
+
+.compact-task-template .inherited-command textarea,
+.role-override-details textarea {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--slate);
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  padding: 10px 11px;
+  resize: vertical;
+}
+
+.role-override-details {
+  background: #f8fafc;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.role-override-details summary {
+  color: var(--slate);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.role-override-details label {
+  margin-top: 10px;
+}
+
+.review-submit-panel {
+  border-color: #bfdbfe;
+}
+
+.job-output-panel {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.job-output-panel .toolbar-actions {
+  min-width: min(100%, 420px);
+}
+
+.job-output-panel .code-block,
+.job-output-detail .code-block {
+  max-height: 520px;
+}
+
+.task-output-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+}
+
+.task-output-card {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.task-output-card > div:first-child {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-output-card span {
+  color: var(--muted);
+  display: block;
+  font-size: 0.76rem;
+  font-weight: 900;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.task-output-card .code-block {
+  max-height: 280px;
+}
+
 .plan-summary-card {
   background: #0f172a;
   border-radius: 14px;
@@ -911,6 +1138,17 @@ button:disabled {
 
 .json-details .code-block {
   margin-top: 10px;
+}
+
+.docker-preview-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.docker-preview-grid .code-block {
+  margin-top: 0;
+  overflow-wrap: anywhere;
 }
 
 .launcher-spec-panel {
@@ -1397,6 +1635,8 @@ button:disabled {
   .metric-grid,
   .filter-bar,
   .inline-form-grid,
+  .job-launcher-shell,
+  .launcher-form-grid,
   .job-workbench,
   .preview-grid,
   .node-command-grid,

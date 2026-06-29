@@ -1,24 +1,30 @@
 import { Search } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CodeBlock, StatusBadge } from '../components/Primitives.jsx';
 import { catalogTemplates } from '../data/productPlan.js';
 import { formatDate } from '../utils/format.js';
 
-const defaultImage = 'nvidia/cuda:12.0-runtime';
-const defaultCommand = './a.out -p $TASK_RANK --master $TASK0_ADDRESS --world-size $WORLD_SIZE';
-const emptyJobForm = { name: '', queue: 'default', project: '', image: defaultImage, command: defaultCommand, useSameCommand: false, replicaPolicy: 'fixed', workingDirectory: '/workspace', dockerOptions: '--network=host\n--ipc=host', sharedEnv: '', taskTemplates: defaultDistributedTemplates(defaultCommand, defaultImage) };
+const defaultImage = 'debian:bookworm-slim';
+const defaultEntrypointScript = 'echo "prepare rank=$RANK world=$WORLD_SIZE task=$KUAFU_TASK_ADDRESS"';
+const defaultTaskScript = 'echo "run task rank=$TASK_RANK"';
+const emptyJobForm = { name: '', queue: 'default', project: '', image: defaultImage, entrypointScript: defaultEntrypointScript, command: defaultTaskScript, useSameCommand: true, replicaPolicy: 'fixed', workingDirectory: '/workspace', dockerOptions: '--network=host\n--ipc=host', sharedEnv: '', taskTemplates: defaultDistributedTemplates(defaultTaskScript, defaultImage) };
 
-export default function JobsView({ jobs, queues, reservedEnv = [], filters, setFilters, openJobDetail, submitJob, runJobAction }) {
+export default function JobsView({ jobs, queues, reservedEnv = [], filters, setFilters, openJobDetail, loadJobDetail, submitJob, runJobAction }) {
   const [jobForm, setJobForm] = useState(emptyJobForm);
   const [preview, setPreview] = useState(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [shareSpec, setShareSpec] = useState(null);
+  const [selectedOutputJobId, setSelectedOutputJobId] = useState('');
+  const [outputDetail, setOutputDetail] = useState(null);
+  const [outputLoading, setOutputLoading] = useState(false);
+  const outputRef = useRef(null);
   const taskTemplates = effectiveTaskTemplates(jobForm);
   const taskGpuTotal = totalTemplateGPUs(taskTemplates);
   const taskCount = totalTemplateCount(taskTemplates);
   const filtered = jobs.filter((job) => (`${job.id} ${job.name} ${job.command}`.toLowerCase().includes(filters.keyword.toLowerCase())) && (filters.status === 'all' || job.status === filters.status) && (filters.queue === 'all' || job.queue === filters.queue));
   const statuses = ['all', ...Array.from(new Set(jobs.map((job) => job.status)))];
+  const selectedOutputJob = outputDetail?.job || jobs.find((job) => job.id === selectedOutputJobId) || jobs[0] || null;
   const previewSpec = useMemo(() => buildPreviewSpec(jobForm, preview), [jobForm, preview]);
   const launcherYaml = useMemo(() => launcherSpecToYaml(toLauncherSpec(jobForm)), [jobForm]);
   const [launcherYamlDraft, setLauncherYamlDraft] = useState(launcherYaml);
@@ -26,6 +32,38 @@ export default function JobsView({ jobs, queues, reservedEnv = [], filters, setF
   useEffect(() => {
     setLauncherYamlDraft(launcherYaml);
   }, [launcherYaml]);
+
+  useEffect(() => {
+    if (!selectedOutputJobId) return undefined;
+    let canceled = false;
+    let timer = null;
+    async function refreshOutput() {
+      setOutputLoading(true);
+      try {
+        const detail = await loadJobDetail(selectedOutputJobId);
+        if (canceled) return;
+        setOutputDetail(detail);
+        if (['Queued', 'Running'].includes(detail.job.status)) {
+          timer = window.setTimeout(refreshOutput, 2000);
+        }
+      } catch (err) {
+        if (!canceled) setError(err.message);
+      } finally {
+        if (!canceled) setOutputLoading(false);
+      }
+    }
+    refreshOutput();
+    return () => {
+      canceled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [selectedOutputJobId, loadJobDetail]);
+
+  function showOutput(jobId) {
+    setOutputDetail(null);
+    setSelectedOutputJobId(jobId);
+    window.requestAnimationFrame(() => outputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }
 
   function onPreview(event) {
     event.preventDefault();
@@ -46,6 +84,8 @@ export default function JobsView({ jobs, queues, reservedEnv = [], filters, setF
     try {
       const job = await submitJob({ ...preview.spec, command: preview.spec.command, taskTemplates: preview.spec.taskTemplates, tasks: preview.tasks, sharedEnv: parseEnvLines(jobForm.sharedEnv) });
       setMessage(`Submitted ${job.name} to ${job.queue}`);
+      setOutputDetail({ job, logs: job.logs || [], metrics: [], taskMetrics: [] });
+      showOutput(job.id);
       setJobForm({ ...emptyJobForm, queue: job.queue });
       setPreview(null);
     } catch (err) {
@@ -110,49 +150,86 @@ export default function JobsView({ jobs, queues, reservedEnv = [], filters, setF
   }
 
   return <section className="panel stack">
-    <div className="section-header"><div><p className="eyebrow">Workloads</p><h2>Jobs</h2><p>Every job submission is previewed as editable commands before execution.</p></div></div>
+    <div className="section-header"><div><p className="eyebrow">Workloads</p><h2>Jobs</h2><p>Every job submission is previewed as editable scripts before execution.</p></div></div>
     {message && <div className="success-banner">{message}</div>}
     {error && <div className="error-banner">{error}</div>}
-    <section className="workflow-shell">
-      <div className="task-support-panel"><div><p className="eyebrow">Distributed task plan</p><h3>{taskCount} tasks · {taskGpuTotal} GPUs</h3><p>Every Kuafu job is submitted as a reviewed master/worker task plan.</p></div><div className="support-chips"><span>Master/worker</span><span>Reserved env</span><span>Reviewed commands</span><span>Task GPU map</span></div></div>
-      <div className="job-workbench">
-        <form className="inline-form-grid job-compose-grid" onSubmit={onPreview}>
+    <section className="job-launcher-shell">
+      <form className="job-intent-form" onSubmit={onPreview}>
+        <div className="launcher-step-header"><span>1</span><div><p className="eyebrow">Configure once</p><h3>Entrypoint script and runtime</h3></div></div>
+        <div className="launcher-form-grid">
           <label>Template<select value="" onChange={(event) => applyTemplate(event.target.value, setJobForm, setPreview)}><option value="">Choose template</option>{catalogTemplates.map((template) => <option key={template.id || template.name} value={template.id || template.name}>{template.name}</option>)}</select></label>
           <label>Name<input value={jobForm.name} onChange={(event) => updateForm(setJobForm, setPreview, 'name', event.target.value)} required /></label>
           <label>Queue<select value={jobForm.queue} onChange={(event) => updateForm(setJobForm, setPreview, 'queue', event.target.value)}>{queues.map((queue) => <option key={queue.name} value={queue.name}>{queue.name}</option>)}</select></label>
           <label>Project<input value={jobForm.project} onChange={(event) => updateForm(setJobForm, setPreview, 'project', event.target.value)} placeholder="optional" /></label>
-          <label>Total GPUs<input value={taskGpuTotal} readOnly /></label>
-          <label>Replica policy<select value={jobForm.replicaPolicy} onChange={(event) => updateForm(setJobForm, setPreview, 'replicaPolicy', event.target.value)}><option value="fixed">fixed</option><option value="elastic">elastic</option></select></label>
-          <label>Working directory<input value={jobForm.workingDirectory} onChange={(event) => updateForm(setJobForm, setPreview, 'workingDirectory', event.target.value)} /></label>
           <label className="double-span">Image<input value={jobForm.image} onChange={(event) => updateForm(setJobForm, setPreview, 'image', event.target.value)} /></label>
-          <label className="double-span">Common command<input value={jobForm.command} onChange={(event) => updateForm(setJobForm, setPreview, 'command', event.target.value)} required /></label>
-          <label className="checkbox-label double-span"><input type="checkbox" checked={jobForm.useSameCommand} onChange={(event) => setSameCommand(setJobForm, setPreview, event.target.checked)} />Master and worker use the same command</label>
-          <details className="advanced-fields double-span"><summary>Advanced environment</summary><label>Shared env<textarea rows="3" value={jobForm.sharedEnv} onChange={(event) => updateForm(setJobForm, setPreview, 'sharedEnv', event.target.value)} placeholder="MODEL_PATH=zai-org/GLM-5.2-FP8" /></label></details>
-          <button className="primary-button form-submit-button">Preview task plan</button>
-        </form>
+          <label>Working directory<input value={jobForm.workingDirectory} onChange={(event) => updateForm(setJobForm, setPreview, 'workingDirectory', event.target.value)} /></label>
+          <label>Replica policy<select value={jobForm.replicaPolicy} onChange={(event) => updateForm(setJobForm, setPreview, 'replicaPolicy', event.target.value)}><option value="fixed">fixed</option><option value="elastic">elastic</option></select></label>
+          <label className="script-editor-label full-span">Entrypoint script (runs before each task)<textarea rows="6" value={jobForm.entrypointScript} onChange={(event) => updateForm(setJobForm, setPreview, 'entrypointScript', event.target.value)} /></label>
+          <label className="script-editor-label full-span">Task script (multi-line)<textarea rows="10" value={jobForm.command} onChange={(event) => updateForm(setJobForm, setPreview, 'command', event.target.value)} required /></label>
+          <label className="double-span">Docker run options<textarea rows="4" value={jobForm.dockerOptions} onChange={(event) => updateForm(setJobForm, setPreview, 'dockerOptions', event.target.value)} placeholder="--network=host&#10;--ipc=host" /></label>
+          <label className="checkbox-label"><input type="checkbox" checked={jobForm.useSameCommand} onChange={(event) => setSameCommand(setJobForm, setPreview, event.target.checked)} />Use this script for every role</label>
+          <details className="advanced-fields"><summary>Environment</summary><label>Shared env<textarea rows="4" value={jobForm.sharedEnv} onChange={(event) => updateForm(setJobForm, setPreview, 'sharedEnv', event.target.value)} placeholder="MODEL_PATH=zai-org/GLM-5.2-FP8" /></label><p className="muted-text">Environment variables are injected before the entrypoint and task scripts run.</p></details>
+        </div>
+        <button className="primary-button form-submit-button">Preview task plan</button>
+      </form>
+      <aside className="launcher-review-rail">
         <PlanSummary form={jobForm} templates={taskTemplates} taskCount={taskCount} taskGpuTotal={taskGpuTotal} />
-      </div>
+        <ReservedEnvTable reservedEnv={reservedEnv} />
+      </aside>
     </section>
-    <section className="command-preview-panel launcher-spec-panel">
-      <div className="section-header compact-header"><div><p className="eyebrow">Launcher protocol</p><h3>YAML launcher spec</h3><p>OpenPAI-style job description: metadata, queue, docker, shared env, and master/worker task templates.</p></div><button className="ghost-button" onClick={importLauncherYaml}>Import YAML into form</button></div>
-      <textarea className="launcher-yaml-editor" rows="14" value={launcherYamlDraft} onChange={(event) => setLauncherYamlDraft(event.target.value)} />
+    <section className="task-layout-panel command-preview-panel">
+      <div className="section-header compact-header"><div><p className="eyebrow">Task layout</p><h3>Roles and resources</h3><p>Scripts, image, Docker options, and env inherit from the job unless a role override is opened.</p></div><div className="toolbar-actions"><button className="ghost-button" onClick={() => addTaskTemplate(setJobForm, setPreview, 'worker')}>Add worker</button><button className="ghost-button" onClick={() => addTaskTemplate(setJobForm, setPreview, 'task')}>Add custom task</button><button className="ghost-button" onClick={() => setJobForm((current) => ({ ...current, taskTemplates: defaultDistributedTemplates(current.command, current.image), useSameCommand: true }))}>Reset</button></div></div>
+      <div className="task-template-grid">{jobForm.taskTemplates.map((template, index) => <TaskTemplateEditor key={index} template={template} commonCommand={jobForm.command} commonImage={jobForm.image} commonDockerOptions={jobForm.dockerOptions} commonWorkingDirectory={jobForm.workingDirectory} useSameCommand={jobForm.useSameCommand} canRemove={jobForm.taskTemplates.length > 1} update={(next) => updateTaskTemplate(setJobForm, setPreview, index, next)} remove={() => removeTaskTemplate(setJobForm, setPreview, index)} />)}</div>
     </section>
-    <section className="command-preview-panel">
-      <div className="section-header compact-header"><div><p className="eyebrow">Task templates</p><h3>Master / worker roles</h3><p>{jobForm.useSameCommand ? 'All roles inherit the common command.' : 'Customize per-role launch commands. Use $RANK and $TASK0_ADDRESS directly.'}</p></div><div className="toolbar-actions"><button className="ghost-button" onClick={() => addTaskTemplate(setJobForm, setPreview, 'worker')}>Add worker</button><button className="ghost-button" onClick={() => addTaskTemplate(setJobForm, setPreview, 'task')}>Add custom task</button><button className="ghost-button" onClick={() => setJobForm((current) => ({ ...current, taskTemplates: defaultDistributedTemplates(current.command, current.image) }))}>Reset</button></div></div>
-      <ReservedEnvTable reservedEnv={reservedEnv} />
-      <div className="task-template-grid">{jobForm.taskTemplates.map((template, index) => <TaskTemplateEditor key={index} template={template} commonCommand={jobForm.command} useSameCommand={jobForm.useSameCommand} canRemove={jobForm.taskTemplates.length > 1} update={(next) => updateTaskTemplate(setJobForm, setPreview, index, next)} remove={() => removeTaskTemplate(setJobForm, setPreview, index)} />)}</div>
-    </section>
-    {preview && <section className="command-preview-panel">
-      <div className="section-header compact-header"><div><p className="eyebrow">Review before submit</p><h3>Reviewed task plan</h3><p>These concrete task commands are what Kuafu stores and schedules. Edit them before submitting.</p></div><button className="primary-button" onClick={onConfirmSubmit}>Submit reviewed task plan</button></div>
+    <details className="command-preview-panel launcher-spec-panel"><summary>Launcher YAML</summary><div className="section-header compact-header"><div><p className="eyebrow">Launcher protocol</p><h3>Portable job spec</h3></div><button className="ghost-button" onClick={importLauncherYaml}>Import YAML into form</button></div><textarea className="launcher-yaml-editor" rows="16" value={launcherYamlDraft} onChange={(event) => setLauncherYamlDraft(event.target.value)} /></details>
+    {preview && <section className="command-preview-panel review-submit-panel">
+      <div className="section-header compact-header"><div><p className="eyebrow">Review before submit</p><h3>Concrete task plan</h3><p>These are the exact task scripts and Docker launch lines Kuafu will store and execute.</p></div><button className="primary-button" onClick={onConfirmSubmit}>Submit reviewed plan</button></div>
       <div className="review-command-line"><span>{preview.command}</span></div>
-      <div className="node-command-grid">{preview.tasks.map((task, index) => <label key={task.id}>{task.name} · rank {task.rank}<textarea rows="4" value={task.command} onChange={(event) => setPreview((current) => ({ ...current, tasks: current.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, command: event.target.value } : item) }))} /></label>)}</div>
+      <div className="node-command-grid review-task-grid">{preview.tasks.map((task, index) => <label key={task.id}>{task.name} · rank {task.rank}<textarea rows="7" value={task.command} onChange={(event) => setPreview((current) => ({ ...current, tasks: current.tasks.map((item, taskIndex) => taskIndex === index ? { ...item, command: event.target.value } : item) }))} /></label>)}</div>
+      <details className="json-details" open><summary>View Docker launch lines</summary><div className="docker-preview-grid">{preview.tasks.map((task) => <CodeBlock key={`${task.id}-docker`} value={renderDockerLaunchCommand(task)} />)}</div></details>
       <details className="json-details" open><summary>View submitted launcher YAML</summary><CodeBlock value={launcherSpecToYaml(previewSpec.launcherSpec || toLauncherSpec(jobForm))} /></details>
       <details className="json-details"><summary>View submitted JSON</summary><CodeBlock value={JSON.stringify(previewSpec, null, 2)} /></details>
     </section>}
-    <div className="filter-bar"><label className="search-box"><Search size={16} /><input placeholder="Search jobs, IDs, commands" value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} /></label><select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>{statuses.map((status) => <option key={status}>{status}</option>)}</select><select value={filters.queue} onChange={(event) => setFilters({ ...filters, queue: event.target.value })}><option value="all">all queues</option>{queues.map((queue) => <option key={queue.name} value={queue.name}>{queue.name}</option>)}</select></div>
-    <div className="table-wrap"><table className="data-table"><thead><tr><th>Job</th><th>Status</th><th>Queue</th><th>Image</th><th>GPU</th><th>Submitted</th><th>Actions</th></tr></thead><tbody>{filtered.map((job) => <tr key={job.id}><td><strong>{job.name}</strong><small>{job.id}</small></td><td><StatusBadge status={job.status} /></td><td>{job.queue}</td><td className="truncate-cell">{job.image || '-'}</td><td>{job.gpuCount}</td><td>{formatDate(job.submittedAt)}</td><td><div className="row-actions"><button className="ghost-button" onClick={() => openJobDetail(job.id)}>Task usage</button><button className="ghost-button" onClick={() => cloneJob(job)}>Clone</button><button className="ghost-button" onClick={() => resubmitJob(job)}>Resubmit</button><button className="ghost-button" onClick={() => shareJob(job)}>Share YAML</button>{job.status === 'Running' && <button className="ghost-button" onClick={() => onAction(job, 'stop')}>Stop</button>}{job.status === 'Queued' && <button className="ghost-button danger" onClick={() => onAction(job, 'cancel')}>Cancel</button>}{['Stopped', 'Failed', 'Canceled', 'Completed'].includes(job.status) && <button className="ghost-button" onClick={() => onAction(job, 'start')}>Start</button>}{job.status !== 'Queued' && <button className="ghost-button" onClick={() => onAction(job, 'restart')}>Restart</button>}</div></td></tr>)}</tbody></table></div>
+    <JobOutputPanel refNode={outputRef} job={selectedOutputJob} detail={outputDetail} loading={outputLoading} jobs={jobs} selectedJobId={selectedOutputJob?.id || ''} showOutput={showOutput} openJobDetail={openJobDetail} />
+    <div className="filter-bar"><label className="search-box"><Search size={16} /><input placeholder="Search jobs, IDs, scripts" value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} /></label><select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>{statuses.map((status) => <option key={status}>{status}</option>)}</select><select value={filters.queue} onChange={(event) => setFilters({ ...filters, queue: event.target.value })}><option value="all">all queues</option>{queues.map((queue) => <option key={queue.name} value={queue.name}>{queue.name}</option>)}</select></div>
+    <div className="table-wrap"><table className="data-table"><thead><tr><th>Job</th><th>Status</th><th>Queue</th><th>Image</th><th>GPU</th><th>Submitted</th><th>Actions</th></tr></thead><tbody>{filtered.map((job) => <tr key={job.id} className={selectedOutputJob?.id === job.id ? 'selected-row' : ''}><td><strong>{job.name}</strong><small>{job.id}</small></td><td><StatusBadge status={job.status} /></td><td>{job.queue}</td><td className="truncate-cell">{job.image || '-'}</td><td>{job.gpuCount}</td><td>{formatDate(job.submittedAt)}</td><td><div className="row-actions"><button className="primary-button output-action-button" onClick={() => showOutput(job.id)}>Output</button><button className="ghost-button" onClick={() => openJobDetail(job.id)}>Details</button><button className="ghost-button" onClick={() => cloneJob(job)}>Clone</button><button className="ghost-button" onClick={() => resubmitJob(job)}>Resubmit</button><button className="ghost-button" onClick={() => shareJob(job)}>Share YAML</button>{job.status === 'Running' && <button className="ghost-button" onClick={() => onAction(job, 'stop')}>Stop</button>}{job.status === 'Queued' && <button className="ghost-button danger" onClick={() => onAction(job, 'cancel')}>Cancel</button>}{['Stopped', 'Failed', 'Canceled', 'Completed'].includes(job.status) && <button className="ghost-button" onClick={() => onAction(job, 'start')}>Start</button>}{job.status !== 'Queued' && <button className="ghost-button" onClick={() => onAction(job, 'restart')}>Restart</button>}</div></td></tr>)}</tbody></table></div>
     {shareSpec && <ShareSpecDialog shareSpec={shareSpec} copyShareSpec={copyShareSpec} close={() => setShareSpec(null)} />}
   </section>;
+}
+
+function JobOutputPanel({ refNode, job, detail, loading, jobs, selectedJobId, showOutput, openJobDetail }) {
+  const logs = detail?.logs || job?.logs || [];
+  const parsed = parseJobOutput(logs);
+  return <section className="job-output-panel" ref={refNode}>
+    <div className="section-header compact-header"><div><p className="eyebrow">Output</p><h3>{job?.name || 'No job selected'}</h3><p>{job ? `${job.status}${loading ? ' · refreshing' : ''} · ${logs.length} log lines` : 'Submit or select a job to inspect stdout and stderr.'}</p></div><div className="toolbar-actions"><select value={selectedJobId} onChange={(event) => showOutput(event.target.value)}><option value="">Latest job</option>{jobs.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{job && <button className="ghost-button" onClick={() => showOutput(job.id)}>Refresh output</button>}{job && <button className="ghost-button" onClick={() => openJobDetail(job.id)}>Open details</button>}</div></div>
+    {parsed.tasks.length ? <div className="task-output-grid">{parsed.tasks.map((task) => <article className="task-output-card" key={task.name}><div><strong>{task.name}</strong><StatusBadge status={task.status || 'Output'} /></div>{task.stdout.length > 0 && <div><span>stdout</span><CodeBlock value={task.stdout.join('\n')} /></div>}{task.stderr.length > 0 && <div><span>stderr</span><CodeBlock value={task.stderr.join('\n')} /></div>}</article>)}</div> : <CodeBlock value="No stdout or stderr yet." />}
+    <details className="json-details"><summary>Diagnostics</summary><CodeBlock value={logs.length ? logs.join('\n') : 'No diagnostic logs yet.'} /></details>
+  </section>;
+}
+
+function parseJobOutput(logs) {
+  const byTask = new Map();
+  const taskFor = (name) => {
+    if (!byTask.has(name)) byTask.set(name, { name, stdout: [], stderr: [], status: '' });
+    return byTask.get(name);
+  };
+  for (const line of logs || []) {
+    const stdout = line.match(/Task ([^ ]+) stdout: ?(.*)$/);
+    if (stdout) {
+      taskFor(stdout[1]).stdout.push(stdout[2]);
+      continue;
+    }
+    const stderr = line.match(/Task ([^ ]+) stderr: ?(.*)$/);
+    if (stderr) {
+      taskFor(stderr[1]).stderr.push(stderr[2]);
+      continue;
+    }
+    const complete = line.match(/Task ([^ ]+) completed successfully/);
+    if (complete) taskFor(complete[1]).status = 'Completed';
+    const failed = line.match(/Task ([^ ]+) failed/);
+    if (failed) taskFor(failed[1]).status = 'Failed';
+  }
+  return { tasks: [...byTask.values()] };
 }
 
 function ShareSpecDialog({ shareSpec, copyShareSpec, close }) {
@@ -166,7 +243,7 @@ function ShareSpecDialog({ shareSpec, copyShareSpec, close }) {
 }
 
 function PlanSummary({ form, templates, taskCount, taskGpuTotal }) {
-  return <aside className="plan-summary-card"><div><p className="eyebrow">Plan summary</p><h3>{form.name || 'unnamed-job'}</h3></div><dl><div><dt>Queue</dt><dd>{form.queue}</dd></div><div><dt>Tasks</dt><dd>{taskCount}</dd></div><div><dt>GPUs</dt><dd>{taskGpuTotal}</dd></div><div><dt>Command mode</dt><dd>{form.useSameCommand ? 'shared' : 'per-role'}</dd></div></dl><div className="plan-role-list">{templates.map((template) => <span key={`${template.name}-${template.role}`}>{template.role}: {template.replicas} x {template.gpuCount} GPU</span>)}</div></aside>;
+  return <aside className="plan-summary-card"><div><p className="eyebrow">Plan summary</p><h3>{form.name || 'unnamed-job'}</h3></div><dl><div><dt>Queue</dt><dd>{form.queue}</dd></div><div><dt>Tasks</dt><dd>{taskCount}</dd></div><div><dt>GPUs</dt><dd>{taskGpuTotal}</dd></div><div><dt>Script mode</dt><dd>{form.useSameCommand ? 'same script' : 'per-role script'}</dd></div></dl><div className="plan-role-list">{templates.map((template) => <span key={`${template.name}-${template.role}`}>{template.role}: {template.replicas} x {template.gpuCount} GPU</span>)}</div></aside>;
 }
 
 function applyTemplate(templateId, setJobForm, setPreview) {
@@ -178,13 +255,16 @@ function applyTemplate(templateId, setJobForm, setPreview) {
     ...current,
     name: template.id || sanitizeName(template.name),
     image: template.image,
+    entrypointScript: current.entrypointScript || '',
     command: template.command,
+    useSameCommand: true,
     taskTemplates: template.id?.startsWith('glm52') ? sglangDistributedTemplates(template.command, template.image) : defaultDistributedTemplates(template.command, template.image),
   }));
 }
 
-function TaskTemplateEditor({ template, commonCommand, useSameCommand, canRemove, update, remove }) {
-  return <article className="task-template-card"><div className="task-template-header"><span><strong>{template.name}</strong><StatusBadge status={template.role} /></span>{canRemove && <button className="ghost-button danger" onClick={remove}>Remove</button>}</div><label>Name<input value={template.name} onChange={(event) => update({ ...template, name: sanitizeName(event.target.value) })} /></label><label>Role<input value={template.role} onChange={(event) => update({ ...template, role: sanitizeName(event.target.value) })} /></label><label>Replicas<input type="number" min="1" value={template.replicas} onChange={(event) => update({ ...template, replicas: Number(event.target.value) || 1 })} /></label><label>GPUs/task<input type="number" min="0" value={template.gpuCount} onChange={(event) => update({ ...template, gpuCount: Number(event.target.value) || 0 })} /></label><label>CPU/task<input type="number" min="0" value={template.cpuCount || 0} onChange={(event) => update({ ...template, cpuCount: Number(event.target.value) || 0 })} /></label><label>Memory GB<input type="number" min="0" value={template.memoryGb || 0} onChange={(event) => update({ ...template, memoryGb: Number(event.target.value) || 0 })} /></label>{useSameCommand ? <div className="full-span inherited-command"><span>Command inherited from common command</span><code>{commonCommand}</code></div> : <label className="full-span">Command<textarea rows="5" value={template.command} onChange={(event) => update({ ...template, command: event.target.value })} /></label>}</article>;
+function TaskTemplateEditor({ template, commonCommand, commonImage, commonDockerOptions, commonWorkingDirectory, useSameCommand, canRemove, update, remove }) {
+  const hasRuntimeOverride = Boolean((template.image && template.image !== commonImage) || template.workingDirectory || (template.dockerOptions || []).length);
+  return <article className="task-template-card compact-task-template"><div className="task-template-header"><span><strong>{template.name}</strong><StatusBadge status={template.role} /></span>{canRemove && <button className="ghost-button danger" onClick={remove}>Remove</button>}</div><label>Name<input value={template.name} onChange={(event) => update({ ...template, name: sanitizeName(event.target.value) })} /></label><label>Role<input value={template.role} onChange={(event) => update({ ...template, role: sanitizeName(event.target.value) })} /></label><label>Replicas<input type="number" min="1" value={template.replicas} onChange={(event) => update({ ...template, replicas: Number(event.target.value) || 1 })} /></label><label>GPUs/task<input type="number" min="0" value={template.gpuCount} onChange={(event) => update({ ...template, gpuCount: Number(event.target.value) || 0 })} /></label><label>CPU/task<input type="number" min="0" value={template.cpuCount || 0} onChange={(event) => update({ ...template, cpuCount: Number(event.target.value) || 0 })} /></label><label>Memory GB<input type="number" min="0" value={template.memoryGb || 0} onChange={(event) => update({ ...template, memoryGb: Number(event.target.value) || 0 })} /></label><div className="full-span inherited-command"><span>{useSameCommand ? 'Script inherited' : 'Role script'}</span>{useSameCommand ? <code>{commonCommand}</code> : <textarea rows="6" value={template.command || commonCommand} onChange={(event) => update({ ...template, command: event.target.value })} />}</div><details className="role-override-details full-span" open={hasRuntimeOverride}><summary>Runtime overrides</summary><label>Image override<input value={template.image && template.image !== commonImage ? template.image : ''} onChange={(event) => update({ ...template, image: event.target.value || commonImage })} placeholder={commonImage} /></label><label>Working directory override<input value={template.workingDirectory || ''} onChange={(event) => update({ ...template, workingDirectory: event.target.value })} placeholder={commonWorkingDirectory} /></label><label>Docker options override<textarea rows="3" value={(template.dockerOptions || []).join('\n')} onChange={(event) => update({ ...template, dockerOptions: splitLines(event.target.value) })} placeholder={commonDockerOptions} /></label></details></article>;
 }
 
 function addTaskTemplate(setJobForm, setPreview, role) {
@@ -207,7 +287,7 @@ function ReservedEnvTable({ reservedEnv }) {
 
 function setSameCommand(setJobForm, setPreview, checked) {
   setPreview(null);
-  setJobForm((current) => ({ ...current, useSameCommand: checked }));
+  setJobForm((current) => ({ ...current, useSameCommand: checked, taskTemplates: checked ? current.taskTemplates.map((template) => ({ ...template, command: current.command })) : current.taskTemplates }));
 }
 
 function updateTaskTemplate(setJobForm, setPreview, index, next) {
@@ -217,7 +297,7 @@ function updateTaskTemplate(setJobForm, setPreview, index, next) {
 
 function updateForm(setJobForm, setPreview, field, value) {
   setPreview(null);
-  setJobForm((current) => ({ ...current, [field]: value }));
+  setJobForm((current) => ({ ...current, [field]: value, taskTemplates: field === 'command' && current.useSameCommand ? current.taskTemplates.map((template) => ({ ...template, command: value })) : current.taskTemplates }));
 }
 
 function toJobPayload(form) {
@@ -228,6 +308,7 @@ function toJobPayload(form) {
     project: form.project || undefined,
     queue: form.queue,
     command: form.command,
+    entrypointScript: form.entrypointScript,
     image: form.image,
     gpuCount: totalTemplateGPUs(templates),
     launcherSpec,
@@ -257,6 +338,7 @@ function toLauncherSpec(form) {
     queue: form.queue,
     replicaPolicy: form.replicaPolicy || 'fixed',
     workingDirectory: form.workingDirectory || '/workspace',
+    entrypointScript: form.entrypointScript || '',
     dependencies: [],
     docker: { image: form.image, options: splitLines(form.dockerOptions) },
     env: parseEnvLines(form.sharedEnv),
@@ -271,6 +353,7 @@ function launcherSpecFromJob(job) {
     queue: job.queue,
     replicaPolicy: 'fixed',
     workingDirectory: job.tasks?.[0]?.workingDirectory || '/workspace',
+    entrypointScript: job.entrypointScript || job.launcherSpec?.entrypointScript || job.tasks?.[0]?.entrypointScript || '',
     dependencies: [],
     docker: { image: job.image, options: job.tasks?.[0]?.dockerOptions || [] },
     env: job.sharedEnv || [],
@@ -284,14 +367,15 @@ function renameLauncherSpec(spec, name) {
 
 function formFromLauncherSpec(spec) {
   const normalized = normalizeLauncherSpec(spec);
-  const tasks = normalized.tasks?.length ? normalized.tasks : defaultDistributedTemplates(defaultCommand, defaultImage);
+  const tasks = normalized.tasks?.length ? normalized.tasks : defaultDistributedTemplates(defaultTaskScript, defaultImage);
   const firstTask = tasks[0] || {};
   return {
     name: normalized.name || '',
     queue: normalized.queue || 'default',
     project: normalized.project || '',
     image: normalized.docker?.image || firstTask.image || defaultImage,
-    command: firstTask.command || defaultCommand,
+    command: firstTask.command || defaultTaskScript,
+    entrypointScript: normalized.entrypointScript || firstTask.entrypointScript || '',
     useSameCommand: tasks.every((task) => task.command === firstTask.command),
     replicaPolicy: normalized.replicaPolicy || 'fixed',
     workingDirectory: normalized.workingDirectory || firstTask.workingDirectory || '/workspace',
@@ -312,13 +396,14 @@ function launcherSpecToYaml(spec) {
     `queue: ${spec.queue || 'default'}`,
     `replicaPolicy: ${spec.replicaPolicy || 'fixed'}`,
     `workingDirectory: ${spec.workingDirectory || '/workspace'}`,
+    spec.entrypointScript ? `entrypointScript: ${yamlScalar(spec.entrypointScript, 2)}` : '',
     'dependencies:',
     ...(dependencies.length ? dependencies.map((item) => `  - ${item}`) : ['  []']),
     'docker:',
-    `  image: ${spec.docker?.image || defaultImage}`,
-    `  options: [${(spec.docker?.options || []).join(', ')}]`,
+    `  image: ${yamlScalar(spec.docker?.image || defaultImage, 2)}`,
+    `  options: ${yamlList(spec.docker?.options || [])}`,
     'env:',
-    ...(env.length ? env.map((item) => `  - ${item.name}: ${item.value || ''}`) : ['  []']),
+    ...(env.length ? env.map((item) => `  - ${item.name}: ${yamlScalar(item.value || '', 4)}`) : ['  []']),
     'tasks:',
     ...tasks.flatMap((task) => [
       `  - name: ${task.name}`,
@@ -326,10 +411,11 @@ function launcherSpecToYaml(spec) {
       `    replicas: ${task.replicas || 1}`,
       task.minReplicas ? `    minReplicas: ${task.minReplicas}` : '',
       task.maxReplicas ? `    maxReplicas: ${task.maxReplicas}` : '',
-      task.image ? `    image: ${task.image}` : '',
-      `    command: ${task.command || defaultCommand}`,
-      `    workingDirectory: ${task.workingDirectory || spec.workingDirectory || '/workspace'}`,
-      `    dockerOptions: [${(task.dockerOptions || spec.docker?.options || []).join(', ')}]`,
+      task.image ? `    image: ${yamlScalar(task.image, 4)}` : '',
+      task.entrypointScript ? `    entrypointScript: ${yamlScalar(task.entrypointScript, 6)}` : '',
+      `    command: ${yamlScalar(task.command || defaultTaskScript, 6)}`,
+      `    workingDirectory: ${yamlScalar(task.workingDirectory || spec.workingDirectory || '/workspace', 4)}`,
+      `    dockerOptions: ${yamlList(task.dockerOptions || spec.docker?.options || [])}`,
       `    gpuCount: ${task.gpuCount || 0}`,
       `    cpuCount: ${task.cpuCount || 0}`,
       `    memoryGb: ${task.memoryGb || 0}`,
@@ -337,20 +423,43 @@ function launcherSpecToYaml(spec) {
   ].filter((line) => line !== '').join('\n');
 }
 
+function yamlScalar(value, blockIndent) {
+  const text = String(value ?? '');
+  if (text.includes('\n')) {
+    const indent = ' '.repeat(blockIndent);
+    return `|-\n${text.split('\n').map((line) => `${indent}${line}`).join('\n')}`;
+  }
+  if (text === '' || /[:#\[\]{}&,*!|>'"%@`]|^\s|\s$/.test(text)) return JSON.stringify(text);
+  return text;
+}
+
+function yamlList(values) {
+  const items = values || [];
+  if (!items.length) return '[]';
+  return `[${items.map((item) => yamlScalar(item, 0)).join(', ')}]`;
+}
+
 function parseLauncherYaml(text) {
   const spec = { replicaPolicy: 'fixed', docker: {}, env: [], dependencies: [], tasks: [] };
   let section = '';
   let nested = '';
   let currentTask = null;
-  for (const rawLine of String(text || '').split('\n')) {
+  const lines = String(text || '').split('\n');
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const rawLine = lines[lineIndex];
     const line = rawLine.replace(/\s+$/, '');
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const indent = line.length - line.trimStart().length;
-    const [key, value] = splitYamlPair(trimmed.replace(/^-\s+/, ''));
+    let [key, value] = splitYamlPair(trimmed.replace(/^-\s+/, ''));
+    if (isBlockScalar(value)) {
+      const block = readYamlBlock(lines, lineIndex, indent);
+      value = block.value;
+      lineIndex = block.nextIndex;
+    }
     if (indent === 0) {
       currentTask = null;
-      if (['name', 'project', 'queue', 'description', 'replicaPolicy', 'workingDirectory'].includes(key)) spec[key] = value;
+      if (['name', 'project', 'queue', 'description', 'replicaPolicy', 'workingDirectory', 'entrypointScript'].includes(key)) spec[key] = value;
       if (key === 'apiVersion') spec.apiVersion = value;
       if (key === 'kind') spec.kind = value;
       if (['metadata', 'spec', 'docker', 'env', 'dependencies', 'tasks'].includes(key)) { section = key; nested = ''; }
@@ -385,6 +494,7 @@ function parseLauncherYaml(text) {
       if (key === 'queue') spec.queue = value;
       if (key === 'replicaPolicy') spec.replicaPolicy = value;
       if (key === 'workingDirectory') spec.workingDirectory = value;
+      if (key === 'entrypointScript') spec.entrypointScript = value;
       continue;
     }
     if (nested === 'docker') {
@@ -416,6 +526,7 @@ function normalizeLauncherSpec(spec) {
       queue: spec.queue || spec.spec?.queue || 'default',
       replicaPolicy: spec.replicaPolicy || spec.spec?.replicaPolicy || 'fixed',
       workingDirectory: spec.workingDirectory || spec.spec?.workingDirectory || '/workspace',
+      entrypointScript: spec.entrypointScript || spec.spec?.entrypointScript || '',
       dependencies: spec.dependencies || spec.spec?.dependencies || [],
       docker: spec.docker?.image ? spec.docker : (spec.spec?.docker || {}),
       env: spec.env?.length ? spec.env : (spec.spec?.env || []),
@@ -450,8 +561,33 @@ function parseYamlList(value) {
   return cleaned.split(',').map((item) => unquote(item.trim())).filter(Boolean);
 }
 
+function isBlockScalar(value) {
+  return value === '|' || value === '|-' || value === '|+';
+}
+
+function readYamlBlock(lines, startIndex, parentIndent) {
+  const blockIndent = parentIndent + 2;
+  const values = [];
+  let index = startIndex + 1;
+  for (; index < lines.length; index++) {
+    const rawLine = lines[index].replace(/\s+$/, '');
+    const trimmed = rawLine.trim();
+    const indent = rawLine.length - rawLine.trimStart().length;
+    if (trimmed && indent <= parentIndent) break;
+    values.push(rawLine.length >= blockIndent ? rawLine.slice(blockIndent) : '');
+  }
+  return { value: values.join('\n').replace(/\n$/, ''), nextIndex: index - 1 };
+}
+
 function unquote(value) {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1);
   return value;
 }
 
@@ -460,7 +596,7 @@ function splitLines(value) {
 }
 
 function effectiveTaskTemplates(form) {
-  if (!form.useSameCommand) return form.taskTemplates;
+  if (!form.useSameCommand) return form.taskTemplates.map((template) => ({ ...template, command: template.command || form.command, image: template.image || form.image }));
   return form.taskTemplates.map((template) => ({ ...template, command: form.command, image: template.image || form.image }));
 }
 
@@ -472,10 +608,10 @@ function totalTemplateCount(templates = []) {
   return templates.reduce((sum, template) => sum + (Number(template.replicas) || 1), 0) || 1;
 }
 
-function defaultDistributedTemplates(command = defaultCommand, image = defaultImage) {
+function defaultDistributedTemplates(command = defaultTaskScript, image = defaultImage) {
   return [
-    { name: 'master', role: 'master', replicas: 1, image, command: './a.out -p 0 --master $TASK0_ADDRESS --world-size $WORLD_SIZE', gpuCount: 1, cpuCount: 4, memoryGb: 16 },
-    { name: 'slave', role: 'slave', replicas: 1, image, command, gpuCount: 1, cpuCount: 4, memoryGb: 16 },
+    { name: 'master', role: 'master', replicas: 1, image, command, gpuCount: 1, cpuCount: 4, memoryGb: 16 },
+    { name: 'worker', role: 'worker', replicas: 1, image, command, gpuCount: 1, cpuCount: 4, memoryGb: 16 },
   ];
 }
 
@@ -504,8 +640,24 @@ function renderPreviewTasks(form) {
   return templates.flatMap((template) => Array.from({ length: Number(template.replicas) || 1 }, (_, ordinal) => {
     const taskRank = rank++;
     const env = mergeEnv(sharedEnv, [{ name: 'RANK', value: String(taskRank) }, { name: 'TASK_RANK', value: String(taskRank) }, { name: 'TASK_INDEX', value: String(taskRank) }, { name: 'TASK_ORDINAL', value: String(ordinal) }, { name: 'TASK_ROLE', value: template.role }, { name: 'WORLD_SIZE', value: String(worldSize) }, { name: 'TASK0_ADDRESS', value: addresses[0] }, { name: 'MASTER_ADDRESS', value: addresses[0] }, { name: 'MASTER_PORT', value: '20000' }, { name: 'KUAFU_TASK_ADDRESS', value: addresses[taskRank] }]);
-    return { id: `${template.name}-${taskRank}`, name: `${template.name}-${ordinal}`, role: template.role, rank: taskRank, ordinal, image: template.image || form.image, gpuCount: template.gpuCount, cpuCount: template.cpuCount, memoryGb: template.memoryGb, command: renderEnv(template.command, env), env };
+    return { id: `${template.name}-${taskRank}`, name: `${template.name}-${ordinal}`, role: template.role, rank: taskRank, ordinal, image: template.image || form.image, workingDirectory: template.workingDirectory || form.workingDirectory || '/workspace', dockerOptions: template.dockerOptions || splitLines(form.dockerOptions), gpuCount: template.gpuCount, cpuCount: template.cpuCount, memoryGb: template.memoryGb, entrypointScript: renderEnv(template.entrypointScript || form.entrypointScript || '', env), command: renderEnv(template.command, env), env };
   }));
+}
+
+function renderDockerLaunchCommand(task) {
+  const parts = ['docker run --rm', '--name', shellQuote(`kuafu-${task.name}`)];
+  const options = task.dockerOptions || [];
+  if (options.length) parts.push(options.join(' '));
+  if (task.workingDirectory) parts.push('-w', shellQuote(task.workingDirectory));
+  for (const item of task.env || []) {
+    parts.push('-e', shellQuote(`${item.name}=${item.value}`));
+  }
+  parts.push(shellQuote(task.image || defaultImage), '/bin/bash', '-lc', shellQuote(renderTaskShellScript(task)));
+  return parts.join(' ');
+}
+
+function renderTaskShellScript(task) {
+  return ['set -e', task.entrypointScript, task.command].filter((part) => String(part || '').trim()).join('\n');
 }
 
 function mergeEnv(...groups) {
@@ -526,9 +678,14 @@ function mergeEnv(...groups) {
 
 function renderEnv(command, env) {
   for (const item of env) {
+    if (!isReservedEnvName(item.name)) continue;
     command = command.replaceAll(`$${item.name}`, item.value).replaceAll(`\${${item.name}}`, item.value);
   }
   return command;
+}
+
+function isReservedEnvName(name) {
+  return ['RANK', 'TASK_RANK', 'TASK_INDEX', 'TASK_ORDINAL', 'TASK_ROLE', 'WORLD_SIZE', 'TASK0_ADDRESS', 'MASTER_ADDRESS', 'MASTER_PORT', 'KUAFU_TASK_ADDRESS'].includes(String(name || '').toUpperCase());
 }
 
 function sanitizeName(value) {

@@ -370,7 +370,7 @@ func submitJob(args []string) {
 		gpuCount = 1
 	}
 	if image == "" {
-		image = "nvidia/cuda:12.0-runtime"
+		image = "debian:bookworm-slim"
 	}
 
 	req := domain.JobSubmitRequest{
@@ -435,7 +435,9 @@ func parseLauncherYAML(content string) domain.LauncherSpec {
 	section := ""
 	nested := ""
 	currentTask := -1
-	for _, rawLine := range strings.Split(content, "\n") {
+	lines := strings.Split(content, "\n")
+	for lineIndex := 0; lineIndex < len(lines); lineIndex++ {
+		rawLine := lines[lineIndex]
 		line := strings.TrimRight(rawLine, " \t")
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -445,6 +447,11 @@ func parseLauncherYAML(content string) domain.LauncherSpec {
 		if indent == 0 {
 			currentTask = -1
 			key, value := splitYAMLPair(trimmed)
+			if isYAMLBlockScalar(value) {
+				block := readYAMLBlock(lines, lineIndex, indent)
+				value = block.value
+				lineIndex = block.nextIndex
+			}
 			switch key {
 			case "name":
 				spec.Name = value
@@ -458,6 +465,8 @@ func parseLauncherYAML(content string) domain.LauncherSpec {
 				spec.ReplicaPolicy = value
 			case "workingDirectory":
 				spec.WorkingDirectory = value
+			case "entrypointScript":
+				spec.EntrypointScript = value
 			case "apiVersion":
 				spec.APIVersion = value
 			case "kind":
@@ -469,6 +478,11 @@ func parseLauncherYAML(content string) domain.LauncherSpec {
 			continue
 		}
 		key, value := splitYAMLPair(strings.TrimPrefix(trimmed, "- "))
+		if isYAMLBlockScalar(value) {
+			block := readYAMLBlock(lines, lineIndex, indent)
+			value = block.value
+			lineIndex = block.nextIndex
+		}
 		if section == "dependencies" {
 			if strings.HasPrefix(trimmed, "- ") {
 				spec.Dependencies = append(spec.Dependencies, key)
@@ -523,6 +537,9 @@ func parseLauncherYAML(content string) domain.LauncherSpec {
 			case "workingDirectory":
 				spec.WorkingDirectory = value
 				spec.Spec.WorkingDirectory = value
+			case "entrypointScript":
+				spec.EntrypointScript = value
+				spec.Spec.EntrypointScript = value
 			}
 			continue
 		}
@@ -576,6 +593,8 @@ func parseLauncherTaskLine(tasks *[]domain.TaskTemplate, currentTask *int, key s
 		task.Image = value
 	case "command":
 		task.Command = value
+	case "entrypointScript":
+		task.EntrypointScript = value
 	case "workingDirectory":
 		task.WorkingDirectory = value
 	case "dockerOptions":
@@ -611,9 +630,45 @@ func parseYAMLList(value string) []string {
 	return items
 }
 
+type yamlBlock struct {
+	value     string
+	nextIndex int
+}
+
+func isYAMLBlockScalar(value string) bool {
+	return value == "|" || value == "|-" || value == "|+"
+}
+
+func readYAMLBlock(lines []string, startIndex int, parentIndent int) yamlBlock {
+	blockIndent := parentIndent + 2
+	values := []string{}
+	index := startIndex + 1
+	for ; index < len(lines); index++ {
+		line := strings.TrimRight(lines[index], " \t")
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if trimmed != "" && indent <= parentIndent {
+			break
+		}
+		if len(line) >= blockIndent {
+			values = append(values, line[blockIndent:])
+		} else {
+			values = append(values, "")
+		}
+	}
+	return yamlBlock{value: strings.TrimRight(strings.Join(values, "\n"), "\n"), nextIndex: index - 1}
+}
+
 func unquoteYAML(value string) string {
 	value = strings.TrimSpace(value)
-	if len(value) >= 2 && ((value[0] == '\'' && value[len(value)-1] == '\'') || (value[0] == '"' && value[len(value)-1] == '"')) {
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		var decoded string
+		if err := json.Unmarshal([]byte(value), &decoded); err == nil {
+			return decoded
+		}
+		return value[1 : len(value)-1]
+	}
+	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
 		return value[1 : len(value)-1]
 	}
 	return value
@@ -1169,7 +1224,7 @@ func printUsage() {
 	fmt.Println("  -c, --command string   Command to run (required)")
 	fmt.Println("  -q, --queue string     Queue name (default: default)")
 	fmt.Println("  -g, --gpus int         Number of GPUs (default: 1)")
-	fmt.Println("  -i, --image string     Container image (default: nvidia/cuda:12.0-runtime)")
+	fmt.Println("  -i, --image string     Container image (default: debian:bookworm-slim)")
 	fmt.Println()
 	fmt.Println("Queue Options:")
 	fmt.Println("  -n, --name string              Queue name (create only)")

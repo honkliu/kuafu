@@ -3,12 +3,20 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/microsoft/kuafu/internal/domain"
 	"github.com/microsoft/kuafu/internal/repository"
 )
+
+func init() {
+	runDockerCommand = func(args []string) (string, string, int, error) {
+		time.Sleep(2 * time.Second)
+		return strings.Join(args, " "), "", 0, nil
+	}
+}
 
 func TestScheduler_JobLifecycle(t *testing.T) {
 	repo := repository.NewMemoryRepository()
@@ -90,6 +98,52 @@ func TestScheduler_JobLifecycle(t *testing.T) {
 	}
 
 	sched.Stop()
+}
+
+func TestScheduler_DockerRunArgsAndOutputLogs(t *testing.T) {
+	command := "echo \"./a.out -p 0 --master $TASK0_ADDRESS --world-size $WORLD_SIZE\""
+	task := domain.TaskInstance{
+		Name:             "master-0",
+		Role:             "master",
+		Rank:             0,
+		Image:            "debian:bookworm-slim",
+		Command:          command,
+		WorkingDirectory: "/workspace",
+		DockerOptions:    []string{"--network=host", "--ipc=host", "-v /mnt/nvme_raid0:/mnt/nvme_raid0"},
+		Env: []domain.EnvVar{
+			{Name: "TASK0_ADDRESS", Value: "echo-aout-master-task-0"},
+			{Name: "WORLD_SIZE", Value: "1"},
+		},
+	}
+
+	args := dockerRunArgs("echo-aout-master", task)
+	joinedArgs := strings.Join(args, " ")
+	if !strings.Contains(joinedArgs, "--network=host") || !strings.Contains(joinedArgs, "--ipc=host") {
+		t.Fatalf("expected docker host/ipc options, got: %#v", args)
+	}
+	if !strings.Contains(joinedArgs, "-v /mnt/nvme_raid0:/mnt/nvme_raid0") {
+		t.Fatalf("expected expanded volume argv, got: %#v", args)
+	}
+	logs := appendOutputLogs(nil, task.Name, "stdout", "./a.out -p 0 --master echo-aout-master-task-0 --world-size 1\n")
+	if !strings.Contains(strings.Join(logs, "\n"), "stdout: ./a.out -p 0 --master echo-aout-master-task-0 --world-size 1") {
+		t.Fatalf("expected real stdout lines to be logged, got: %#v", logs)
+	}
+}
+
+func TestTaskExecutionScriptRunsEntrypointBeforeTask(t *testing.T) {
+	task := domain.TaskInstance{
+		EntrypointScript: "MODEL_PATH=/models/glm\nexport FROM_ENTRY=ready",
+		Command:          "echo $MODEL_PATH\necho $FROM_ENTRY",
+	}
+	script := taskExecutionScript(task)
+	entryIndex := strings.Index(script, "MODEL_PATH=/models/glm")
+	taskIndex := strings.Index(script, "echo $MODEL_PATH")
+	if entryIndex < 0 || taskIndex < 0 || entryIndex > taskIndex {
+		t.Fatalf("expected entrypoint before task script, got:\n%s", script)
+	}
+	if !strings.Contains(script, "set -e") || !strings.Contains(script, "export FROM_ENTRY=ready") {
+		t.Fatalf("expected strict shell and exported entry variable, got:\n%s", script)
+	}
 }
 
 func TestScheduler_CancelJob(t *testing.T) {

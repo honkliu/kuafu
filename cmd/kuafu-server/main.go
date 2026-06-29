@@ -33,7 +33,7 @@ func main() {
 	if cfg.Runtime.Mode == config.ModeProduction {
 		log.Fatalf("production configuration is valid, but production runtime is not wired yet: Kubernetes client, GPU device plugin, scheduler adapter, and persistent repository are required by steps 3-10. Use --mode lab only for the in-memory prototype.")
 	}
-	log.Println("Starting Kuafu in LAB MODE: in-memory state and simulated scheduling are active")
+	log.Println("Starting Kuafu in LAB MODE: in-memory state and real Docker-backed lab execution are active")
 
 	// Create repository
 	repo := repository.NewMemoryRepository()

@@ -12,7 +12,7 @@ The lab prototype includes:
 
 - ✅ Domain models for Node/GPU inventory
 - ✅ In-memory repository with A00/A01 testbed data
-- ✅ Simulated, in-memory job scheduler with queueing, GPU allocation, start/stop/restart/cancel actions, terminal states, and logs
+- ✅ In-memory lab scheduler with queueing, GPU allocation, start/stop/restart/cancel actions, terminal states, and real Docker-backed task stdout/stderr logs
 - ✅ HTTP API server with inventory, jobs, queues, reservations, cluster summary, and React console static serving
 - ✅ CLI tool for inventory, jobs, and queues
 - ✅ React/Vite GPU lease console with OpenPAI/Slurm/lease-platform-inspired IA: Cluster, Nodes, Jobs, Leases, Workspaces, Monitoring, Cost, Catalog, Projects, Audit, and Admin
@@ -104,14 +104,14 @@ cd q:\gitroot\kuafu
 .\validate-mvp.ps1
 ```
 
-This will build the image, run tests, start the server, validate inventory/job/queue endpoints, exercise the CLI, and test the simulated job lifecycle.
+This will build the image, run tests, start the server, validate inventory/job/queue endpoints, exercise the CLI, and test the lab job lifecycle.
 
 ### Manual Testing
 
 ```powershell
 # Build and run server
 docker build -t kuafu:mvp .
-docker run --rm -p 8080:8080 kuafu:mvp
+docker run --rm -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock kuafu:mvp
 
 # In another terminal, test API
 curl http://localhost:8080/health
@@ -131,7 +131,7 @@ kuafu/
 ├── internal/
 │   ├── domain/               # Node/GPU domain models
 │   ├── repository/           # In-memory storage
-│   ├── scheduler/            # Simulated job scheduler
+│   ├── scheduler/            # Lab scheduler and Docker-backed executor
 │   └── api/                  # HTTP handlers
 ├── pkg/
 │   └── fixtures/             # Testbed seed data
@@ -233,7 +233,7 @@ The Dockerfile also runs `npm ci && npm run build`, so the production image alwa
 ### Runtime Modes
 
 - `production` is the default binary mode and intentionally fails until Kubernetes, GPU device plugins, scheduler adapter, and persistent repository are configured.
-- `lab` runs the current in-memory repository and simulated scheduler for local development and UI/API iteration.
+- `lab` runs the current in-memory repository and Docker-backed lab scheduler for local development and UI/API iteration.
 
 ```powershell
 # Fails fast until production Kubernetes integration exists
@@ -267,4 +267,4 @@ The platform will ultimately manage up to 4000 GPUs across different SKUs (NVIDI
 - Web UI and REST API
 - Kubernetes-native scheduling
 
-The lab prototype is not the product destination. Production Kuafu will replace simulated scheduling with Kubernetes-native job orchestration, GPU device plugins, persistent state, scheduler adapters, quota enforcement, and operational observability.
+The lab prototype is not the product destination. Production Kuafu will replace Docker-backed lab execution with Kubernetes-native job orchestration, GPU device plugins, persistent state, scheduler adapters, quota enforcement, and operational observability.

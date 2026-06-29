@@ -20,7 +20,7 @@ The domain projection is [internal/domain/job.go](../internal/domain/job.go): `J
 
 ## Current State
 
-The repo includes `UnsupportedRuntimeAdapter` so production startup can fail honestly until a real adapter is wired. The existing lab scheduler remains separate and simulated.
+The repo includes `UnsupportedRuntimeAdapter` so production startup can fail honestly until a real adapter is wired. The existing lab scheduler remains separate from production adapters and executes task commands through Docker in lab mode.
 
 ## Adapter Requirements
 

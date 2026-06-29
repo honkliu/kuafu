@@ -44,8 +44,8 @@ export const iterations = [
 
 export const catalogTemplates = [
   { id: 'pytorch-ddp', name: 'PyTorch distributed training', image: 'nvcr.io/nvidia/pytorch:24.05-py3', command: 'torchrun --nproc_per_node=8 train.py', gpu: 'A100/H100', gpuCount: 8, status: 'Approved', description: 'Baseline multi-GPU training template.' },
-  { id: 'jupyter-gpu', name: 'Jupyter GPU workspace', image: 'quay.io/jupyter/pytorch-notebook:cuda12', command: 'start-notebook.py', gpu: '1-8 GPUs', gpuCount: 1, status: 'Executor pending', description: 'Interactive notebook workspace template.' },
-  { id: 'ray-head', name: 'Ray cluster head', image: 'rayproject/ray:latest-gpu', command: 'ray start --head', gpu: 'multi-node', gpuCount: 1, status: 'Runtime pending', description: 'Cluster head template for Ray workloads.' },
+  { id: 'jupyter-gpu', name: 'Jupyter GPU workspace', image: 'quay.io/jupyter/pytorch-notebook:cuda12', command: 'start-notebook.py', gpu: '1-8 GPUs', gpuCount: 1, status: 'Workspace', description: 'Interactive notebook workspace template.' },
+  { id: 'ray-head', name: 'Ray cluster head', image: 'rayproject/ray:latest-gpu', command: 'ray start --head', gpu: 'multi-node', gpuCount: 1, status: 'Cluster', description: 'Cluster head template for Ray workloads.' },
   { id: 'nccl-benchmark', name: 'MPI / NCCL benchmark', image: 'nvcr.io/nvidia/nccl:latest', command: 'all_reduce_perf', gpu: 'topology-aware', gpuCount: 8, status: 'Approved', description: 'Fabric and collectives validation template.' },
   {
     id: 'glm52-h200-fp8-low-latency',

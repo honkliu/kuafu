@@ -9,6 +9,7 @@ type Job struct {
 	Project       string        `json:"project,omitempty"`
 	Queue         string        `json:"queue"`
 	Command       string        `json:"command"`
+	EntrypointScript string    `json:"entrypointScript,omitempty"`
 	Image         string        `json:"image,omitempty"`
 	GPUCount      int           `json:"gpuCount"`
 	Status        JobStatus     `json:"status"`
@@ -45,6 +46,7 @@ type TaskTemplate struct {
 	MaxReplicas      int      `json:"maxReplicas,omitempty" yaml:"maxReplicas,omitempty"`
 	Image            string   `json:"image,omitempty" yaml:"image,omitempty"`
 	Command          string   `json:"command" yaml:"command"`
+	EntrypointScript string   `json:"entrypointScript,omitempty" yaml:"entrypointScript,omitempty"`
 	WorkingDirectory string   `json:"workingDirectory,omitempty" yaml:"workingDirectory,omitempty"`
 	DockerOptions    []string `json:"dockerOptions,omitempty" yaml:"dockerOptions,omitempty"`
 	GPUCount         int      `json:"gpuCount,omitempty" yaml:"gpuCount,omitempty"`
@@ -63,6 +65,7 @@ type TaskInstance struct {
 	Address       string    `json:"address"`
 	Image         string    `json:"image,omitempty"`
 	Command       string    `json:"command"`
+	EntrypointScript string `json:"entrypointScript,omitempty"`
 	WorkingDirectory string    `json:"workingDirectory,omitempty"`
 	DockerOptions    []string  `json:"dockerOptions,omitempty"`
 	GPUCount      int       `json:"gpuCount,omitempty"`
@@ -93,6 +96,7 @@ type JobSubmitRequest struct {
 	Project       string         `json:"project,omitempty"`
 	Queue         string         `json:"queue"`
 	Command       string         `json:"command"`
+	EntrypointScript string     `json:"entrypointScript,omitempty"`
 	Image         string         `json:"image,omitempty"`
 	GPUCount      int            `json:"gpuCount"`
 	LauncherSpec  *LauncherSpec  `json:"launcherSpec,omitempty"`
@@ -109,6 +113,7 @@ type LauncherSpec struct {
 	Dependencies []string         `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
 	ReplicaPolicy string          `json:"replicaPolicy,omitempty" yaml:"replicaPolicy,omitempty"`
 	WorkingDirectory string       `json:"workingDirectory,omitempty" yaml:"workingDirectory,omitempty"`
+	EntrypointScript string       `json:"entrypointScript,omitempty" yaml:"entrypointScript,omitempty"`
 	Docker       LauncherDocker   `json:"docker,omitempty" yaml:"docker,omitempty"`
 	Env          []EnvVar         `json:"env,omitempty" yaml:"env,omitempty"`
 	Tasks        []TaskTemplate   `json:"tasks,omitempty" yaml:"tasks,omitempty"`
@@ -128,6 +133,7 @@ type LauncherJobSpec struct {
 	Queue            string          `json:"queue" yaml:"queue"`
 	ReplicaPolicy    string          `json:"replicaPolicy,omitempty" yaml:"replicaPolicy,omitempty"`
 	WorkingDirectory string          `json:"workingDirectory,omitempty" yaml:"workingDirectory,omitempty"`
+	EntrypointScript string          `json:"entrypointScript,omitempty" yaml:"entrypointScript,omitempty"`
 	Docker           LauncherDocker  `json:"docker,omitempty" yaml:"docker,omitempty"`
 	Env              []EnvVar        `json:"env,omitempty" yaml:"env,omitempty"`
 	Tasks            []TaskTemplate  `json:"tasks" yaml:"tasks"`

@@ -1,10 +1,13 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
+	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,13 +16,15 @@ import (
 	"github.com/microsoft/kuafu/internal/repository"
 )
 
-// Scheduler manages job scheduling and execution simulation
+// Scheduler manages job scheduling and lab execution.
 type Scheduler struct {
 	repo     repository.Repository
 	mu       sync.Mutex
 	stopChan chan struct{}
 	wg       sync.WaitGroup
 }
+
+var runDockerCommand = realDockerCommand
 
 // NewScheduler creates a new scheduler
 func NewScheduler(repo repository.Repository) *Scheduler {
@@ -144,7 +149,7 @@ func (s *Scheduler) tryScheduleJob(job *domain.Job) {
 		}
 	}
 
-	// Start job execution simulation in background
+	// Start job execution in background.
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -153,47 +158,25 @@ func (s *Scheduler) tryScheduleJob(job *domain.Job) {
 }
 
 func (s *Scheduler) executeJob(job *domain.Job) {
-	// Simulate job execution (2-5 seconds for demo)
-	duration := 2 * time.Second
-	if job.GPUCount > 2 {
-		duration = 3 * time.Second
-	}
-
-	// Add execution logs
-	job.Logs = append(job.Logs, fmt.Sprintf("[%s] Executing command: %s", time.Now().Format("15:04:05"), job.Command))
-	job.Logs = append(job.Logs, fmt.Sprintf("[%s] Using image: %s", time.Now().Format("15:04:05"), job.Image))
-	if err := s.repo.AddJob(job); err != nil {
-		log.Printf("Failed to append execution logs for job %s: %v", job.ID, err)
-	}
-
-	time.Sleep(duration)
+	result := runJobTasks(job)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Refresh job state
 	currentJob, err := s.repo.GetJob(job.ID)
 	if err != nil {
 		return
 	}
-
-	// Check if job was canceled or stopped while the lab executor was sleeping.
 	if currentJob.Status != domain.JobStatusRunning {
 		return
 	}
 
-	// Complete the job successfully (90% success rate)
-	exitCode := 0
+	currentJob.Logs = append(currentJob.Logs, result.Logs...)
+	exitCode := result.ExitCode
 	status := domain.JobStatusCompleted
-
-	// Simulate occasional failures
-	if time.Now().Unix()%10 == 0 {
-		exitCode = 1
+	if exitCode != 0 {
 		status = domain.JobStatusFailed
-		currentJob.ErrorMsg = "simulated failure"
-		currentJob.Logs = append(currentJob.Logs, fmt.Sprintf("[%s] ERROR: Command failed", time.Now().Format("15:04:05")))
-	} else {
-		currentJob.Logs = append(currentJob.Logs, fmt.Sprintf("[%s] Command completed successfully", time.Now().Format("15:04:05")))
+		currentJob.ErrorMsg = result.ErrorMessage
 	}
 
 	currentJob.Status = status
@@ -221,6 +204,156 @@ func (s *Scheduler) executeJob(job *domain.Job) {
 	}
 
 	log.Printf("Job %s completed with status %s", currentJob.ID, status)
+}
+
+type executionResult struct {
+	Logs         []string
+	ExitCode     int
+	ErrorMessage string
+}
+
+func runJobTasks(job *domain.Job) executionResult {
+	if len(job.Tasks) == 0 {
+		return runTask(job.Name, domain.TaskInstance{Name: "job", Role: "job", Rank: 0, Image: job.Image, Command: job.Command})
+	}
+	result := executionResult{ExitCode: 0}
+	for _, task := range job.Tasks {
+		taskResult := runTask(job.Name, task)
+		result.Logs = append(result.Logs, taskResult.Logs...)
+		if taskResult.ExitCode != 0 && result.ExitCode == 0 {
+			result.ExitCode = taskResult.ExitCode
+			result.ErrorMessage = taskResult.ErrorMessage
+		}
+	}
+	return result
+}
+
+func runTask(jobName string, task domain.TaskInstance) executionResult {
+	timestamp := time.Now().Format("15:04:05")
+	image := task.Image
+	if image == "" {
+		image = "<image>"
+	}
+	dockerArgs := dockerRunArgs(jobName, task)
+	launch := "docker " + strings.Join(quoteArgsForLog(dockerArgs), " ")
+	logs := []string{
+		fmt.Sprintf("[%s] Task %s(rank=%d role=%s) image: %s", timestamp, task.Name, task.Rank, task.Role, image),
+		fmt.Sprintf("[%s] Task %s docker options: %s", timestamp, task.Name, strings.Join(task.DockerOptions, " ")),
+		fmt.Sprintf("[%s] Task %s docker launch: %s", timestamp, task.Name, launch),
+		fmt.Sprintf("[%s] Task %s entrypoint script: %s", timestamp, task.Name, emptyDash(task.EntrypointScript)),
+		fmt.Sprintf("[%s] Task %s task script: %s", timestamp, task.Name, task.Command),
+	}
+	stdout, stderr, exitCode, err := runDockerCommand(dockerArgs)
+	logs = appendOutputLogs(logs, task.Name, "stdout", stdout)
+	logs = appendOutputLogs(logs, task.Name, "stderr", stderr)
+	if err != nil {
+		logs = append(logs, fmt.Sprintf("[%s] Task %s failed with exit code %d", time.Now().Format("15:04:05"), task.Name, exitCode))
+		return executionResult{Logs: logs, ExitCode: exitCode, ErrorMessage: err.Error()}
+	}
+	logs = append(logs, fmt.Sprintf("[%s] Task %s completed successfully", time.Now().Format("15:04:05"), task.Name))
+	return executionResult{Logs: logs, ExitCode: 0}
+}
+
+func realDockerCommand(args []string) (string, string, int, error) {
+	cmd := exec.Command("docker", args...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		exitCode = 1
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
+	}
+	return stdout.String(), stderr.String(), exitCode, err
+}
+
+func appendOutputLogs(logs []string, taskName string, streamName string, output string) []string {
+	output = strings.TrimRight(output, "\r\n")
+	if output == "" {
+		return logs
+	}
+	for _, line := range strings.Split(output, "\n") {
+		logs = append(logs, fmt.Sprintf("[%s] Task %s %s: %s", time.Now().Format("15:04:05"), taskName, streamName, strings.TrimRight(line, "\r")))
+	}
+	return logs
+}
+
+func dockerRunArgs(jobName string, task domain.TaskInstance) []string {
+	args := []string{"run", "--rm", "--name", fmt.Sprintf("kuafu-%s-%d", sanitizeDockerName(jobName), task.Rank)}
+	args = append(args, expandDockerOptions(task.DockerOptions)...)
+	if task.WorkingDirectory != "" {
+		args = append(args, "-w", task.WorkingDirectory)
+	}
+	for _, item := range task.Env {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", item.Name, item.Value))
+	}
+	image := task.Image
+	if image == "" {
+		image = "debian:bookworm-slim"
+	}
+	args = append(args, image, "/bin/bash", "-lc", taskExecutionScript(task))
+	return args
+}
+
+func taskExecutionScript(task domain.TaskInstance) string {
+	parts := []string{"set -e"}
+	if strings.TrimSpace(task.EntrypointScript) != "" {
+		parts = append(parts, "# kuafu entrypoint", task.EntrypointScript)
+	}
+	parts = append(parts, "# kuafu task", task.Command)
+	return strings.Join(parts, "\n")
+}
+
+func emptyDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
+}
+
+func expandDockerOptions(options []string) []string {
+	args := []string{}
+	for _, option := range options {
+		args = append(args, strings.Fields(option)...)
+	}
+	return args
+}
+
+func quoteArgsForLog(args []string) []string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		if strings.ContainsAny(arg, " \t\n'\"") {
+			quoted = append(quoted, shellQuote(arg))
+		} else {
+			quoted = append(quoted, arg)
+		}
+	}
+	return quoted
+}
+
+func sanitizeDockerName(value string) string {
+	value = strings.ToLower(value)
+	var builder strings.Builder
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '-' || char == '_' || char == '.' {
+			builder.WriteRune(char)
+		} else {
+			builder.WriteRune('-')
+		}
+	}
+	result := strings.Trim(builder.String(), "-_.")
+	if result == "" {
+		return "task"
+	}
+	return result
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func (s *Scheduler) releaseAllocatedGPUs(gpuIDs []string) {

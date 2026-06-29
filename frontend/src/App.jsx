@@ -124,7 +124,7 @@ export default function App() {
       <Topbar activeView={activeView} loading={loading} error={error} refresh={loadAll} />
       {activeView === 'cluster' && <ClusterView data={data} nodes={nodes} activeJobs={activeJobs} activeReservations={activeReservations} openLeaseDrawer={openLeaseDrawer} />}
       {activeView === 'nodes' && <NodesView nodes={nodes} selectedNodes={selectedNodes} toggleNode={toggleNode} openLeaseDrawer={openLeaseDrawer} releaseLease={releaseLease} />}
-      {activeView === 'jobs' && <JobsView jobs={data.jobs} queues={data.queues} reservedEnv={data.reservedEnv} filters={filters} setFilters={setFilters} openJobDetail={openJobDetail} submitJob={handleSubmitJob} runJobAction={handleJobAction} />}
+      {activeView === 'jobs' && <JobsView jobs={data.jobs} queues={data.queues} reservedEnv={data.reservedEnv} filters={filters} setFilters={setFilters} openJobDetail={openJobDetail} loadJobDetail={loadJobDetail} submitJob={handleSubmitJob} runJobAction={handleJobAction} />}
       {activeView === 'queues' && <QueuesView queues={data.queues} jobs={data.jobs} saveQueue={handleSaveQueue} deleteQueue={handleDeleteQueue} />}
       {activeView === 'leases' && <LeasesView reservations={data.reservations} openLeaseDrawer={openLeaseDrawer} releaseLease={releaseLease} />}
       {activeView === 'workspaces' && <WorkspacesView openLeaseDrawer={openLeaseDrawer} />}

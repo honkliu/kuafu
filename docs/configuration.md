@@ -17,7 +17,7 @@ Flags only override config when they are explicitly present on the command line.
 
 ## Lab Mode
 
-Lab mode is the only runnable mode today. It uses the in-memory repository and simulated scheduler.
+Lab mode is the only runnable mode today. It uses the in-memory repository and Docker-backed lab scheduler. When the server runs inside a container, mount the host Docker socket so submitted tasks can execute real containers and capture stdout/stderr logs.
 
 ```powershell
 go run ./cmd/kuafu-server --config configs/kuafu.lab.json
@@ -27,6 +27,12 @@ Equivalent flags:
 
 ```powershell
 go run ./cmd/kuafu-server --mode lab --addr :8080 --seed=true
+```
+
+Containerized lab server:
+
+```powershell
+docker run --rm -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock kuafu:mvp
 ```
 
 ## A00 External Lab Access
